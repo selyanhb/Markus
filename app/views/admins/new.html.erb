@@ -1,7 +1,7 @@
-<div id="title_bar"><h1><%= I18n.t("admins.create_new_admin") %></h1>
-</div>
+<% content_for :title, t('admins.new') %>
 
-<div class="wrapLeft">
-<%= render :partial => "layouts/userform",
-    :locals => { :controller => 'admins', :action => 'create'} %>
+<div class='wrapper'>
+  <%= render partial: 'layouts/userform',
+             locals: { controller: 'admins',
+                       action: 'create' } %>
 </div>

@@ -1,15 +1,33 @@
-class SubmissionRule < ActiveRecord::Base
+class SubmissionRule < ApplicationRecord
 
-  belongs_to :assignment
-  has_many :periods, :dependent => :destroy, :order => 'id'
-  accepts_nested_attributes_for :periods, :allow_destroy => true
+  class InvalidRuleType < Exception
+    def initialize(rule_name)
+      super I18n.t('submission_rules.errors.not_valid_submission_rule', type: rule_name)
+    end
+  end
 
-#  validates_associated :assignment
-#  validates_presence_of :assignment
+  belongs_to :assignment, inverse_of: :submission_rule, foreign_key: :assessment_id
+  has_many :periods, dependent: :destroy, inverse_of: :submission_rule
+  accepts_nested_attributes_for :periods, allow_destroy: true
+  validates_associated :periods
 
-  def can_collect_now?
-    return @can_collect_now if !@can_collect_now.nil?
-    @can_collect_now = Time.zone.now >= get_collection_time
+  def self.descendants
+    [NoLateSubmissionRule,
+     PenaltyPeriodSubmissionRule,
+     PenaltyDecayPeriodSubmissionRule,
+     GracePeriodSubmissionRule]
+  end
+
+  def can_collect_now?(section = nil)
+    reset_collection_time if @can_collect_now.nil?
+    section_id = section.nil? ? 0 : section.id
+    return @can_collect_now[section_id] unless @can_collect_now[section_id].nil?
+    @can_collect_now[section_id] = Time.zone.now >= get_collection_time(section)
+  end
+
+  def can_collect_all_now?
+    return @can_collect_all_now unless @can_collect_all_now.nil?
+    @can_collect_all_now = Time.zone.now >= assignment.latest_due_date
   end
 
   def can_collect_grouping_now?(grouping)
@@ -17,43 +35,41 @@ class SubmissionRule < ActiveRecord::Base
   end
 
   # Cache that allows us to quickly get collection time
-  def get_collection_time
-    return @get_collection_time if !@get_collection_time.nil?
-    @get_collection_time = calculate_collection_time
-  end
-
-  def calculate_collection_time
-    assignment.latest_due_date + hours_sum.hours
-  end
-
-  def calculate_grouping_collection_time(grouping)
-    if grouping.inviter.section
-      SectionDueDate.due_date_for(grouping.inviter.section,
-                                         assignment)
+  def get_collection_time(section=nil)
+    if section.nil?
+      return @get_global_collection_time unless @get_global_collection_time.nil?
+      @get_global_collection_time = calculate_collection_time
     else
-      assignment.due_date + hours_sum.hours
+      reset_collection_time if @get_collection_time.nil?
+      unless @get_collection_time[section.id].nil?
+        return @get_collection_time[section.id]
+      end
+      @get_collection_time[section.id] = calculate_collection_time(section)
     end
   end
 
-  # When Students commit code after the collection time, MarkUs should warn
-  # the Students with a message saying that the due date has passed, and the
-  # work they're submitting will probably not be graded
-  def commit_after_collection_message
-    #I18n.t 'submission_rules.submission_rule.commit_after_collection_message'
-    raise NotImplementedError.new('SubmissionRule:  commit_after_collection_message not implemented')
+  def calculate_collection_time(section=nil)
+    assignment.section_due_date(section) + hours_sum.hours
   end
 
-  # When Students view the File Manager after the collection time,
-  # MarkUs should warnthe Students with a message saying that the
-  # due date has passed, and that any work they're submitting will
-  # probably not be graded
-  def after_collection_message
-    raise NotImplementedError.new('SubmissionRule:  after_collection_message not implemented')
+  # Return the time after which +grouping+ can be collected.
+  # This is calculated by adding any penalty periods to this grouping's due date.
+  #
+  # If this grouping belongs to a timed_assignment and the student has not started
+  # the assignment yet, the collection date it the due date without any additions.
+  # This is because a student must start the assignment before the due date so their
+  # (empty) submission can be collected as soon as the due date has passed if they have
+  # not started.
+  def calculate_grouping_collection_time(grouping)
+    return grouping.due_date if assignment.is_timed && grouping.start_time.nil?
+
+    add = grouping.extension.nil? || grouping.extension.apply_penalty ? hours_sum.hours : 0
+    grouping.due_date + add
   end
 
   # When we're past the due date, the File Manager for the students will display
   # a message to tell them that they're currently past the due date.
-  def overtime_message
+  def overtime_message(grouping)
     raise NotImplementedError.new('SubmissionRule: overtime_message not implemented')
   end
 
@@ -70,23 +86,18 @@ class SubmissionRule < ActiveRecord::Base
     raise NotImplementedError.new('SubmissionRule:  apply_submission_rule not implemented')
   end
 
-  def description_of_rule
-    raise NotImplementedError.new('SubmissionRule:  description_of_rule not implemented')
-  end
-
-  def grader_tab_partial(grouping)
-    raise NotImplementedError.new('SubmissionRule:  render_grader_tab not implemented')
-  end
-
   def reset_collection_time
-    @get_collection_time = nil
-    @can_collect_now = nil
+    @get_collection_time = Array.new
+    @get_global_collection_time = nil
+    @can_collect_now = Array.new
+    @can_collect_all_now = nil
   end
 
   private
 
-  def calculate_overtime_hours_from(from_time)
-    overtime_hours = ((from_time - assignment.due_date) / 1.hour).ceil
+  # Over time hours could be a fraction. This is mostly used for testing
+  def calculate_overtime_hours_from(from_time, grouping)
+    overtime_hours = (from_time - grouping.due_date) / 1.hour
     # If the overtime is less than 0, that means it was submitted early, so
     # just return 0 - otherwise, return overtime_hours.
     [0, overtime_hours].max

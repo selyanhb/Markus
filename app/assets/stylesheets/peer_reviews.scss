@@ -1,0 +1,13 @@
+@import 'common/core';
+@import 'common/columns';
+@import 'common/assignment_dropdown';
+
+.peer-review-amount-spinner {
+  background-color: $lighter-blue;
+  border: $dark-grey 1px solid;
+  padding: 5px;
+}
+
+.peer-review-amount-spinner input {
+  margin-left: 5px;
+}

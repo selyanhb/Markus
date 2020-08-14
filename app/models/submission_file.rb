@@ -1,5 +1,4 @@
-require 'rghost'
-class SubmissionFile < ActiveRecord::Base
+class SubmissionFile < ApplicationRecord
 
   # Only allow alphanumeric characters, '.', '-', and '_' as
   # character set for submission files.
@@ -8,38 +7,50 @@ class SubmissionFile < ActiveRecord::Base
   # matching the regular expression above
   SUBSTITUTION_CHAR = '_'
 
-  belongs_to  :submission
-  has_many :annotations
+  belongs_to :submission
   validates_associated :submission
-  validates_presence_of :submission
+
+  has_many :annotations
+
   validates_presence_of :filename
+
   validates_presence_of :path
 
-  validates_inclusion_of :is_converted, :in => [true, false]
+  validates_inclusion_of :is_converted, in: [true, false]
 
-  def get_file_type
+  def self.get_file_type(filename)
     # This is where you can add more languages that SubmissionFile will
     # recognize.  It will return the name of the language, which
     # SyntaxHighlighter can work with.
-    case File.extname(filename)
+    case File.extname(filename).downcase
     when '.sci'
-      return 'scilab'
+      'scilab'
     when '.java'
-      return 'java'
+      'java'
     when '.rb'
-      return 'ruby'
+      'ruby'
     when '.py'
-      return 'python'
+      'python'
     when '.js'
-      return 'javascript'
-    when '.c'
-      return 'c'
-    when '.scm'
-      return 'scheme'
-    when '.ss'
-      return 'scheme'
+      'javascript'
+    when '.html'
+      'html'
+    when '.css'
+      'css'
+    when '.c', '.h'
+      'c'
+    when '.hs'
+      'haskell'
+    when '.scm', '.ss', '.rkt'
+      'scheme'
+    when '.tex', '.latex'
+      'tex'
+    when '.jpeg', '.jpg', '.gif', '.png', '.heic', '.heif'
+      'image'
+    when '.pdf'
+      'pdf'
     else
-      return 'unknown'
+      'unknown'
     end
   end
 
@@ -50,23 +61,27 @@ class SubmissionFile < ActiveRecord::Base
     # comment and the second element being the syntax to end a comment.  Use
     #the language's multiple line comment format.
     case File.extname(filename)
-    when '.java', '.js', '.c'
-      return %w(/* */)
+    when '.java', '.js', '.c', '.css'
+      %w(/* */)
     when '.rb'
-      return ["=begin\n", "\n=end"]
+      ["=begin\n", "\n=end"]
     when '.py'
-      return %w(""" """)
-    when '.scm', '.ss'
-      return %w(#| |#)
+      %w(""" """)
+    when '.scm', '.ss', '.rkt'
+      %w(#| |#)
+    when '.hs'
+      %w({- -})
+    when '.html'
+      %w(<!-- -->)
     else
-      return %w(## ##)
+      %w(## ##)
     end
   end
 
   def is_supported_image?
     #Here you can add more image types to support
-    supported_formats = %w(.jpeg .jpg .gif .png)
-    supported_formats.include?(File.extname(filename))
+    supported_formats = %w[.jpeg .jpg .gif .png .heic .heif]
+    supported_formats.include?(File.extname(filename).downcase)
   end
 
   def is_pdf?
@@ -102,91 +117,34 @@ class SubmissionFile < ActiveRecord::Base
     all_annotations
   end
 
-  def convert_pdf_to_jpg
-    return unless MarkusConfigurator.markus_config_pdf_support && self.is_pdf?
-    m_logger = MarkusLogger.instance
-    storage_path = File.join(MarkusConfigurator.markus_config_pdf_storage,
-      self.submission.grouping.group.repository_name,
-      self.path)
-    file_path = File.join(storage_path, self.filename.split('.')[0] + '.jpg')
-    self.export_file(storage_path)
-
-    # Remove any old copies of this image if they exist
-    i = 1
-    filePathToRemove = File.join(storage_path,
-                                 self.filename.split('.')[0] + '_' + sprintf('%04d' % i.to_s()) + '.jpg')
-    while File.exists?(filePathToRemove)
-      FileUtils.remove_file(filePathToRemove, true)
-      i += 1
-      filePathToRemove = File.join(storage_path,
-                                   self.filename.split('.')[0] + '_' + sprintf('%04d' % i.to_s()) + '.jpg')
-    end
-
-    # Convert a pdf file into a an array of jpg files (one jpg file = one page
-    # of the pdf file)
-    file = RGhost::Convert.new(File.join(storage_path,
-                                  self.filename))
-    results = file.to :jpeg,
-                      :filename => file_path,
-                      :multipage => true,
-                      :resolution => 150
-    if file.error
-      m_logger.log('rghost: Image conversion error')
-    end
-
-    FileUtils.remove_file(File.join(storage_path, self.filename), true)
-    self.is_converted = true
-    self.save
-  end
-
-  # Return the contents of this SubmissionFile.  Include annotations in the
+  # Return the contents of this SubmissionFile. Include annotations in the
   # file if include_annotations is true.
-  def retrieve_file(include_annotations=false)
-    student_group = submission.grouping.group
-    repo = student_group.repo
-    revision_number = submission.revision_number
-    revision = repo.get_revision(revision_number)
-    if revision.files_at_path(path)[filename].nil?
-      raise I18n.t('results.could_not_find_file',
-                   :filename => filename,
-                   :repository_name => student_group.repository_name)
+  def retrieve_file(include_annotations = false, repo = nil)
+    student_group = self.submission.grouping.group
+    revision_identifier = self.submission.revision_identifier
+
+    get_retrieved_file = lambda do |open_repo|
+      revision = open_repo.get_revision(revision_identifier)
+      revision_file = revision.files_at_path(self.path, with_attrs: false)[self.filename]
+      if revision_file.nil?
+        raise I18n.t('submissions.errors.could_not_find_file',
+                     filename: self.filename,
+                     group_name: student_group.group_name)
+      end
+      open_repo.download_as_string(revision_file)
     end
-    retrieved_file = repo.download_as_string(revision.files_at_path(path)[filename])
-    repo.close
+
+    if repo.nil?
+      retrieved_file = student_group.access_repo do |open_repo|
+        get_retrieved_file.call(open_repo)
+      end
+    else
+      retrieved_file = get_retrieved_file.call(repo)
+    end
     if include_annotations
       retrieved_file = add_annotations(retrieved_file)
     end
     retrieved_file
-  end
-
-  # Export this file from the svn repository into storage_path
-  # If a file of the same name as the one we are trying to export exists in
-  # the given repository, it will be overwritten by the svn exports
-  def export_file(storage_path)
-    m_logger = MarkusLogger.instance
-    m_logger.log("Exporting #{self.filename} from student repository")
-    begin
-      # Create the storage directories if they dont already exist
-      FileUtils.makedirs(storage_path)
-      # but deleted the file if it already exists
-      if File.exists?(File.join(storage_path, self.filename))
-        FileUtils.rm(File.join(storage_path, self.filename))
-      end
-      repo = submission.grouping.group.repo
-      revision_number = submission.revision_number
-      repo.export(File.join(storage_path, self.filename),
-                  File.join(self.path, self.filename),
-                  revision_number)
-    end
-
-    # Let's check the file exists befor claiming the file has been exported
-    # properly
-    if File.exists?(File.join(storage_path, self.filename))
-      m_logger.log("Successfully exported #{self.filename} from student repository to #{File.join(storage_path, self.filename)}")
-    else
-      m_logger.log("Failed to export #{self.filename} from student
-                      repository")
-    end
   end
 
   private
@@ -197,17 +155,21 @@ class SubmissionFile < ActiveRecord::Base
     file_contents.split("\n").each_with_index do |contents, index|
       annotations.each do |annot|
         if index == annot.line_start.to_i - 1
-           text = AnnotationText.find(annot.annotation_text_id).content
-           result = result.concat(I18n.t('graders.download.begin_annotation',
-               :id => annot.annotation_number.to_s,
-               :text => text,
-               :comment_start => comment_syntax[0],
-               :comment_end => comment_syntax[1]) + "\n")
+          annotation_text = AnnotationText.find(annot.annotation_text_id)
+          text = annotation_text.content
+          unless annotation_text.deduction.nil? || annotation_text.deduction == 0
+            text += " [#{annotation_text.annotation_category.flexible_criterion.name}: -#{annotation_text.deduction}]"
+          end
+          result = result.concat(I18n.t('annotations.download_submission_file.begin_annotation',
+                                        id: annot.annotation_number.to_s,
+                                        text: text,
+                                        comment_start: comment_syntax[0],
+                                        comment_end: comment_syntax[1]) + "\n")
         elsif index == annot.line_end.to_i
-           result = result.concat(I18n.t('graders.download.end_annotation',
-               :id => annot.annotation_number.to_s,
-               :comment_start => comment_syntax[0],
-               :comment_end => comment_syntax[1]) + "\n")
+          result = result.concat(I18n.t('annotations.download_submission_file.end_annotation',
+               id: annot.annotation_number.to_s,
+               comment_start: comment_syntax[0],
+               comment_end: comment_syntax[1]) + "\n")
         end
       end
     result = result.concat(contents + "\n")

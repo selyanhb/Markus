@@ -1,0 +1,21 @@
+<% unless marking_scheme.nil? %>
+  <p>
+    <%= t(:marking_scheme_with_id, marking_scheme_id: marking_scheme.id) %>
+  </p>
+
+  <table>
+    <tr>
+      <td><%= t(:average) %></td>
+      <td>
+        <%= number_to_percentage(DescriptiveStatistics.mean(grades) || 0, precision: 1) %>
+      </td>
+    </tr>
+
+    <tr>
+      <td><%= t(:median) %></td>
+      <td>
+        <%= number_to_percentage(DescriptiveStatistics.median(grades) || 0, precision: 1) %>
+      </td>
+    </tr>
+  </table>
+<% end %>

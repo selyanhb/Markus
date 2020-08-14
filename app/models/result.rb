@@ -1,73 +1,172 @@
-class Result < ActiveRecord::Base
+class Result < ApplicationRecord
 
   MARKING_STATES = {
-    :complete => 'complete',
-    :partial => 'partial',
-    :unmarked => 'unmarked'
+    complete: 'complete',
+    incomplete: 'incomplete'
   }
 
   belongs_to :submission
-  has_many :marks
-  has_many :extra_marks
+  has_one :grouping, through: :submission
+  has_many :marks, dependent: :destroy
+  has_many :extra_marks, dependent: :destroy
+  has_many :annotations, dependent: :destroy
+  has_many :peer_reviews, dependent: :destroy
 
+  after_create :create_marks
   validates_presence_of :marking_state
-  validates_inclusion_of :marking_state,
-                         :in => [Result::MARKING_STATES[:complete],
-                                 Result::MARKING_STATES[:partial],
-                                 Result::MARKING_STATES[:unmarked]]
-  validates_numericality_of :total_mark, :greater_than_or_equal_to => 0
-  before_update :unrelease_partial_results
+  validates_inclusion_of :marking_state, in: MARKING_STATES.values
+
+  validates_numericality_of :total_mark, greater_than_or_equal_to: 0
+
+  before_update :check_for_released
   before_save :check_for_nil_marks
 
-  # calculate the total mark for this assignment
-  def update_total_mark
-    total = get_subtotal + get_total_extra_points
-    # added_percentage
-    percentage = get_total_extra_percentage
-    total = total + (percentage * submission.assignment.total_mark / 100)
-    self.total_mark = total
-    self.save
+  scope :submitted_remarks_and_all_non_remarks, lambda {
+    results = Result.arel_table
+    where(results[:remark_request_submitted_at].eq(nil))
+  }
+
+  # Returns a list of total marks for each student whose submissions are graded
+  # for the assignment specified by +assessment_id+, sorted in ascending order.
+  # This includes duplicated marks for each student in the same group (marks
+  # are given for a group, so each student in the same group gets the same
+  # mark).
+  def self.student_marks_by_assignment(assessment_id)
+    # Need to get a list of total marks of students' latest results (i.e., not
+    # including old results after having remarked results). This is a typical
+    # greatest-n-per-group problem and can be implemented using a subquery
+    # join.
+    subquery = Result.select('max(results.id) max_id')
+                     .joins(submission: { grouping: { student_memberships: :user } })
+                     .where(groupings: { assessment_id: assessment_id },
+                            users: { hidden: false },
+                            submissions: { submission_version_used: true },
+                            marking_state: Result::MARKING_STATES[:complete])
+                     .group('users.id')
+    Result.joins("JOIN (#{subquery.to_sql}) s ON id = s.max_id")
+      .order(:total_mark).pluck(:total_mark)
   end
 
-  #returns the sum of the marks not including bonuses/deductions
-  def get_subtotal
-    total = 0.0
-    self.marks.all(:include => [:markable]).each do |m|
-      total = total + m.get_mark
+  # Update the total mark attribute
+  #
+  # If the +assignment+ value is nil, the assignment will be determined dynamically.
+  # However, passing the +assignment+ value explicitly is more efficient if we are
+  # updating multiple total marks for a single assignment since it allows for
+  # caching of criteria.
+  # Warning: this does not check if the +assignment+ passed as an argument is actually
+  # the one associate with this result.
+  def update_total_mark(assignment: nil)
+    update(total_mark: get_total_mark(assignment: assignment))
+  end
+
+  # Calculate the total mark for this submission
+  #
+  # See the documentation for update_total_mark for information about when to explicitly
+  # pass the +assignment+ variable and associated warnings.
+  def get_total_mark(assignment: nil)
+    user_visibility = is_a_review? ? :peer_visible : :ta_visible
+    subtotal = get_subtotal(assignment: assignment)
+    extra_marks = get_total_extra_marks(user_visibility: user_visibility)
+    [0, subtotal + extra_marks].max
+  end
+
+  # The sum of the marks not including bonuses/deductions
+  #
+  # See the documentation for update_total_mark for information about when to explicitly
+  # pass the +assignment+ variable and associated warnings.
+  def get_subtotal(assignment: nil)
+    if marks.empty?
+      0
+    else
+      assignment ||= submission.grouping.assignment
+      if is_a_review?
+        user_visibility = :peer_visible
+        assignment = assignment.pr_assignment
+      else
+        user_visibility = :ta_visible
+      end
+      criterion_ids = assignment.criteria.where(user_visibility => true).ids
+      marks_array = marks.where(criterion_id: criterion_ids).pluck(:mark)
+      # TODO: sum method does not work with empty arrays or with arrays containing nil values.
+      #       Consider updating/replacing gem:
+      #       see: https://github.com/thirtysixthspan/descriptive_statistics/issues/44
+      marks_array.map! { |m| m ? m : 0 }
+      marks_array.empty? ? 0 : marks_array.sum
     end
-    total
   end
 
-  #returns the sum of all the POSITIVE extra marks
-  def get_positive_extra_points
-    extra_marks.positive.points.sum('extra_mark')
+  # The sum of the bonuses deductions and late penalties
+  #
+  # If the +max_mark+ value is nil, its value will be determined dynamically
+  # based on the max_mark value of the associated assignment.
+  # However, passing the +max_mark+ value explicitly is more efficient if we are
+  # repeatedly calling this method where the max_mark doesn't change, such as when
+  # all the results are associated with the same assignment.
+  #
+  # +user_visibility+ is passed to the Assignment.max_mark method to determine the
+  # max_mark value only if the +max_mark+ argument is nil.
+  def get_total_extra_marks(max_mark: nil, user_visibility: :ta_visible)
+    Result.get_total_extra_marks(id, max_mark: max_mark, user_visibility: user_visibility)[id] || 0
   end
 
-  # Returns the sum of all the negative bonus marks
-  def get_negative_extra_points
-    extra_marks.negative.points.sum('extra_mark')
+  # The sum of the bonuses deductions and late penalties for multiple results.
+  # This returns a hash mapping the result ids from the +result_ids+ argument to
+  # the sum of all extra marks calculated for that result.
+  #
+  # If the +max_mark+ value is nil, its value will be determined dynamically
+  # based on the max_mark value of the associated assignment.
+  # However, passing the +max_mark+ value explicitly is more efficient if we are
+  # repeatedly calling this method where the max_mark doesn't change, such as when
+  # all the results are associated with the same assignment.
+  #
+  # +user_visibility+ is passed to the Assignment.max_mark method to determine the
+  # max_mark value only if the +max_mark+ argument is nil.
+  def self.get_total_extra_marks(result_ids, max_mark: nil, user_visibility: :ta_visible)
+    result_data = Result.joins(:extra_marks, submission: [grouping: :assignment])
+                        .where(id: result_ids)
+                        .pluck(:id, :extra_mark, :unit, 'assessments.id')
+    extra_marks_hash = Hash.new { |h,k| h[k] = 0 }
+    max_mark_hash = Hash.new
+    result_data.each do |id, extra_mark, unit, assessment_id|
+      if unit == 'points'
+        extra_marks_hash[id] += extra_mark.round(1)
+      elsif unit == 'percentage'
+        if max_mark
+          assignment_max_mark = max_mark
+        else
+          max_mark_hash[assessment_id] ||= Assignment.find(assessment_id)&.max_mark(user_visibility)
+          assignment_max_mark = max_mark_hash[assessment_id]
+        end
+        max_mark = max_mark_hash[assessment_id]
+        extra_marks_hash[id] = (extra_mark * assignment_max_mark / 100).round(1)
+      end
+    end
+    extra_marks_hash
   end
 
+  # The sum of the bonuses and deductions, other than late penalty
   def get_total_extra_points
-    return 0.0 if extra_marks.empty?
-    get_positive_extra_points + get_negative_extra_points
+    extra_marks.points.map(&:extra_mark).reduce(0, :+).round(1)
   end
 
-  def get_positive_extra_percentage
-    extra_marks.positive.percentage.sum('extra_mark')
+  # The sum of all the positive extra marks
+  def get_positive_extra_points
+    extra_marks.positive.points.map(&:extra_mark).reduce(0, :+).round(1)
   end
 
-  def get_negative_extra_percentage
-    extra_marks.negative.percentage.sum('extra_mark')
+  # The sum of all the negative extra marks
+  def get_negative_extra_points
+    extra_marks.negative.points.map(&:extra_mark).reduce(0, :+).round(1)
   end
 
+  # Percentage deduction for late penalty
   def get_total_extra_percentage
-    return 0.0 if extra_marks.empty?
-    get_positive_extra_percentage + get_negative_extra_percentage
+    extra_marks.percentage.map(&:extra_mark).reduce(0, :+).round(1)
   end
 
-  def get_total_extra_percentage_as_points
-    get_total_extra_percentage * submission.assignment.total_mark / 100
+  # Point deduction for late penalty
+  def get_total_extra_percentage_as_points(user_visibility = :ta_visible)
+    (get_total_extra_percentage * submission.assignment.max_mark(user_visibility) / 100).round(1)
   end
 
   # un-releases the result
@@ -78,26 +177,75 @@ class Result < ActiveRecord::Base
 
   def mark_as_partial
     return if self.released_to_students
-    self.marking_state = Result::MARKING_STATES[:partial]
+    self.marking_state = Result::MARKING_STATES[:incomplete]
     self.save
   end
 
+  def is_a_review?
+    !peer_review_id.nil?
+  end
+
+  def is_review_for?(user, assignment)
+    grouping = user.grouping_for(assignment.id)
+    pr = PeerReview.find_by(result_id: self.id)
+    !pr.nil? && submission.grouping == grouping
+  end
+
+  def create_marks
+    assignment = self.submission.assignment
+    assignment.ta_criteria.each do |criterion|
+      criterion.marks.find_or_create_by(result_id: id)
+    end
+    self.update_total_mark
+  end
+
+  # Returns a hash of all marks for this result.
+  # TODO: make it include extra marks as well.
+  def mark_hash
+    Hash[
+      marks.map do |mark|
+        [mark.criterion_id, mark.mark]
+      end
+    ]
+  end
+
   private
-  # If this record is marked as "partial", ensure that its
-  # "released_to_students" value is set to false.
-  def unrelease_partial_results
-    if marking_state != MARKING_STATES[:complete]
-      self.released_to_students = false
+
+  # Do not allow the marking state to be changed to incomplete if the result is released
+  def check_for_released
+    if released_to_students && marking_state_changed?(to: Result::MARKING_STATES[:incomplete])
+      errors.add(:base, I18n.t('results.marks_released'))
+      throw(:abort)
     end
     true
   end
 
-  def check_for_nil_marks
-    # Check that the marking state is not no mark is nil or
-    if self.marks.find_by_mark(nil) &&
-          self.marking_state == Result::MARKING_STATES[:complete]
-      errors.add_to_base(I18n.t('common.criterion_incomplete_error'))
-      return false
+  def check_for_nil_marks(user_visibility = :ta_visible)
+    # This check is only required when the marking state is complete.
+    return true unless marking_state == Result::MARKING_STATES[:complete]
+
+    # peer review result is a special case because when saving a pr result
+    # we can't pass in a parameter to the before_save filter, so we need
+    # to manually determine the visibility. If it's a pr result, we know we
+    # want the peer-visible criteria
+    visibility = is_a_review? ? :peer_visible : user_visibility
+
+    criteria = submission.assignment.criteria.where(visibility => true).ids
+    nil_marks = false
+    num_marks = 0
+    marks.each do |mark|
+      if criteria.member? mark.criterion_id
+        num_marks += 1
+        if mark.mark.nil?
+          nil_marks = true
+          break
+        end
+      end
+    end
+
+    if nil_marks || num_marks < criteria.count
+      errors.add(:base, I18n.t('results.criterion_incomplete_error'))
+      throw(:abort)
     end
     true
   end

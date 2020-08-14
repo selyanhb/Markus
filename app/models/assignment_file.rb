@@ -1,11 +1,19 @@
-class AssignmentFile < ActiveRecord::Base
+class AssignmentFile < ApplicationRecord
 
-  belongs_to :assignment
+  belongs_to :assignment, foreign_key: :assessment_id
+  has_many :criteria_assignment_files_joins, dependent: :destroy
+  has_many :template_divisions
 
+  before_validation :clean_filename
   validates_presence_of :filename
-  validates_uniqueness_of :filename, :scope => :assignment_id
-  validates_format_of :filename,
-          :with => /^[0-9a-zA-Z\.\-_]+$/,
-          :message => I18n.t('validation_messages.format_of_assignment_file')
+  validates_uniqueness_of :filename, scope: :assessment_id
+  validates_format_of :filename, with: %r{\A[\-\._a-zA-Z0-9][/\-\._a-zA-Z0-9]*\z}
 
+  private
+
+  def clean_filename
+    if self.filename
+      self.filename = Pathname.new(self.filename).cleanpath.to_s
+    end
+  end
 end

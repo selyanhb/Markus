@@ -1,5 +1,5 @@
+var modalNotesGroup = null;
 
-jQuery(document).ready(function () {
-  window.modal_upload = new ModalMarkus('#upload_dialog');
-  window.modal_download = new ModalMarkus('#download_dialog');
+$(document).ready(function () {
+  modalNotesGroup = new ModalMarkus('#notes_dialog');
 });

@@ -1,22 +1,24 @@
-<div id="annotation_list_holder">
-    <%= render :partial => 'annotation_categories/annotation_category_edit',
-               :locals => {:annotation_category => annotation_category}
-    %>
-  <h2>Annotations
-    <% path = add_annotation_text_assignment_annotation_category_path(
-            :id => @annotation_category.id) %>
-    <%= link_to t('annotations.update.add_annotation'), '#',
-                :onclick => "add_annotation_prompt('#{path}')" %>
-  </h2>
-<div id="add_annotation_text_control">
-</div>
-<ul id="annotation_list">
-<% if @annotation_texts %>
-  <% @annotation_texts.each do |annotation_text| %>
-    <%= render :partial => 'annotation_text',
-               :locals => {:annotation_text => annotation_text} %>
-  <% end %>
-<% end %>
-</ul>
-</div>
+<div id='annotation_list_holder'>
+  <%= render partial: 'annotation_categories/annotation_category_edit',
+             locals: { annotation_category: annotation_category } %>
 
+  <% path = new_annotation_text_assignment_annotation_categories_path(
+    assignment_id: annotation_category.assignment.id,
+    annotation_category_id: annotation_category.id
+  ) %>
+  <div class='float-right'>
+    <%= link_to t('annotation_categories.add_annotation'),
+                'javascript:void(0);',
+                onclick: "add_annotation_prompt('#{path}')",
+                class: 'button' %>
+  </div>
+
+  <h2>
+    <%= t('activerecord.models.annotation.other') %>
+  </h2>
+
+  <ul id='annotation_list'>
+    <%= render partial: 'annotation_text',
+               collection: annotation_texts %>
+  </ul>
+</div>

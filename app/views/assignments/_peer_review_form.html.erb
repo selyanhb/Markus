@@ -1,0 +1,211 @@
+<% content_for :head do %>
+  <%= stylesheet_link_tag 'jquery-ui', 'jquery-ui-timepicker-addon' %>
+  <%= javascript_include_tag 'create_assignment',
+                             'jquery-ui-timepicker-addon',
+                             'PeriodDeltaChain/PeriodDeltaChain',
+                             'localize_date' %>
+  <%= render partial: 'boot', formats: [:js], handlers: [:erb] %>
+  <%= render partial: 'shared/navigation_warning',
+             formats: [:js],
+             handlers: [:erb] %>
+<% end %>
+
+<%= render 'shared/flash_message' %>
+
+<%= form_for @assignment do |f| %>
+  <%= f.fields_for :assignment_properties do |ap_f| %>
+
+    <label class='required'><%= t('required_fields') %></label>
+
+    <%# Assignment properties %>
+    <fieldset>
+      <legend>
+        <span><%= t('menu.properties') %></span>
+      </legend>
+
+      <div class='help assignment_properties_help'>
+        <p class='help-message-box assignment_properties_help'>
+          <%= t('assignments.help.edit.properties_html') %>
+        </p>
+      </div>
+
+      <div class="inline-labels">
+        <%= f.label :short_identifier,
+                    Assignment.human_attribute_name(:short_identifier),
+                    class: 'required' %>
+        <%= f.text_field :short_identifier,
+                         onchange: 'set_onbeforeunload(true);',
+                         size: 35,
+                         maxlength: 30,
+                         required: true,
+                         readonly: true %>
+
+        <%= f.label :description,
+                    Assignment.human_attribute_name(:description),
+                    class: 'required' %>
+        <%= f.text_field :description,
+                         onchange: 'set_onbeforeunload(true);',
+                         size: 35,
+                         required: true %>
+
+        <%= f.label :message %>
+        <%= f.text_area :message,
+                        cols: 65,
+                        rows: 8,
+                        onchange: 'set_onbeforeunload(true);' %>
+
+        <%= f.label :due_date,
+                    Assignment.human_attribute_name(:due_date),
+                    class: 'required' %>
+        <%= f.text_field :due_date,
+                         onchange: 'set_onbeforeunload(true);',
+                         value: @assignment.due_date.nil? ? '' :
+                           @assignment.due_date.strftime(
+                             '%Y-%m-%d %l:%M %p'),
+                         size: 35,
+                         required: true,
+                         placeholder: t('time.format_string.placeholder') %>
+
+        <% unless @sections.empty? %>
+          <%= ap_f.label :section_due_dates_type, Assignment.human_attribute_name(:section_due_dates_type) %>
+          <span>
+            <%= ap_f.check_box :section_due_dates_type, onclick: 'set_onbeforeunload(true);' %>
+            &nbsp; (<%= t('assignments.form.section_due_dates_option') %>)
+          </span>
+        <% end %>
+      </div>
+      <% unless @sections.empty? %>
+        <div id='section_due_dates_information'
+             style='<%= 'display: none' unless @assignment.section_due_dates_type %>'>
+          <p class='information'>
+            <%= t('assignments.form.section_due_dates_info_html') %>
+          </p>
+          <div class='section_due_date_form table'>
+            <table>
+              <thead>
+              <tr>
+                <th><%= Section.model_name.human %></th>
+                <th><%= Assignment.human_attribute_name(:due_date) %></th>
+              </tr>
+              </thead>
+              <tbody>
+              <%= f.fields_for :section_due_dates,
+                               @section_due_dates do |due_date_f| %>
+                <tr>
+                  <% obj = due_date_f.object %>
+                  <td><%= obj.section.name %></td>
+                  <td>
+                    <%= due_date_f.text_field :section_id, class: 'hidden' %>
+                    <%= due_date_f.text_field :due_date,
+                                              class: 'section_due_date_input',
+                                              value: obj.due_date.nil? ? '' :
+                                                obj.due_date.strftime(
+                                                  '%Y-%m-%d %l:%M %p') %>
+                  </td>
+                </tr>
+              <% end %>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      <% end %>
+
+      <fieldset class='no-legend'>
+        <div class='inline-labels'>
+          <%= f.label :is_hidden, Assignment.human_attribute_name(:is_hidden) %>
+          <%= f.check_box :is_hidden,
+                          onclick: 'set_onbeforeunload(true);' %>
+        </div>
+      </fieldset>
+    </fieldset>
+
+    <%# Group properties %>
+    <fieldset>
+      <legend>
+        <span><%= t('assignments.form.group_properties') %></span>
+      </legend>
+
+      <div class='help assignment_assignment_type_help'>
+        <p class='help-message-box assignment_assignment_type_help'>
+          <%= t('assignments.help.edit.assignment_type_html') %>
+        </p>
+      </div>
+
+      <% if @assignment.new_record? && @clone_assignments.size > 0 %>
+        <p id='persist_groups_assignment_style'>
+          <%= check_box_tag :persist_groups, onclick: 'set_onbeforeunload(true);' %>
+          <%= label_tag :persist_groups, t('assignments.form.persist_groups_from') %>
+          <%= select_tag :persist_groups_assignment,
+                         options_for_select(@clone_assignments.map { |a| [a.short_identifier, a.id] }),
+                         disabled: true %>
+        </p>
+      <% end %>
+      <p id='is_group_assignment_style' class='inline-labels'>
+        <%= label_tag :is_group_assignment,
+                      Assignment.human_attribute_name(:allow_groups) %>
+        <%= check_box_tag :is_group_assignment, true,
+                          @assignment.student_form_groups ||
+                            @assignment.invalid_override,
+                          onchange: 'set_onbeforeunload(true);' %>
+      </p>
+      <fieldset class='group_properties'>
+        <div id='group_properties'>
+          <div class='inline-labels'>
+            <%= ap_f.label :student_form_groups,
+                           Assignment.human_attribute_name(:student_form_groups) %>
+            <%= ap_f.check_box :student_form_groups,
+                               onchange: 'set_onbeforeunload(true);' %>
+
+            <%= ap_f.label :group_min,
+                           Assignment.human_attribute_name(:group_min) %>
+            <%= ap_f.number_field :group_min,
+                                  min: 1,
+                                  max: 999,
+                                  onchange: 'set_onbeforeunload(true);' %>
+            <%= ap_f.label :group_max,
+                           Assignment.human_attribute_name(:group_max) %>
+            <%= ap_f.number_field :group_max,
+                                  min: 1,
+                                  max: 999,
+                                  onchange: 'set_onbeforeunload(true);' %>
+
+            <%= ap_f.label :group_name_autogenerated,
+                           Assignment.human_attribute_name(:group_name_autogenerated),
+                           onchange: 'set_onbeforeunload(true);' %>
+            <%= ap_f.check_box :group_name_autogenerated %>
+          </div>
+        </div>
+      </fieldset>
+    </fieldset>
+
+    <%# Submission rules %>
+    <fieldset id='submission_rule_fields'>
+      <legend>
+        <span><%= SubmissionRule.model_name.human %></span>
+      </legend>
+
+      <div class='help assignment_submission_rules_help'>
+        <p class='help-message-box assignment_submission_rules_help'>
+          <%= t('assignments.help.edit.submission_rules') %>
+        </p>
+      </div>
+
+      <%= f.fields_for :submission_rule do |rule| %>
+        <p>
+          <%= rule.radio_button :type,
+                                'NoLateSubmissionRule',
+                                checked: true,
+                                id: 'no_late_submission_rule' %>
+          <%= label_tag 'no_late_submission_rule',
+                        NoLateSubmissionRule.human_attribute_name(:form_description) %>
+        </p>
+      <% end %>
+    </fieldset>
+
+    <p>
+      <%= f.submit t(:save),
+                   data: { disable_with: t('working') },
+                   onclick: 'set_onbeforeunload(false);' %>
+    </p>
+  <% end %>
+<% end %>

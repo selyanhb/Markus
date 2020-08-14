@@ -1,0 +1,28 @@
+es:
+  notification_mailer:
+    release_email:
+      subject: 'UPDATE ME'
+      greeting: 'UPDATE ME'
+      text_body: 'UPDATE ME'
+      button_text: 'UPDATE ME'
+      explicit_link: 'UPDATE ME'
+      disclaimer: 'UPDATE ME'
+      settings_link: 'UPDATE ME'
+
+    release_spreadsheet_email:
+      subject: 'UPDATE ME'
+      greeting: 'UPDATE ME'
+      text_body: 'UPDATE ME'
+      button_text: 'UPDATE ME'
+      explicit_link: "UPDATE ME"
+      disclaimer: 'UPDATE ME'
+      settings_link: 'UPDATE ME'
+
+    grouping_invite_email:
+      subject: 'UPDATE ME'
+      greeting: 'UPDATE ME'
+      text_body: 'UPDATE ME'
+      button_text: 'UPDATE ME'
+      explicit_link: 'UPDATE ME'
+      disclaimer: 'UPDATE ME'
+      settings_link: 'UPDATE ME'

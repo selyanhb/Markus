@@ -1,0 +1,42 @@
+en:
+  flash:
+    actions:
+      create:
+        success: "%{resource_name} was successfully created."
+        error: "%{resource_name} could not be created."
+      update:
+        success: "%{resource_name} was successfully updated."
+        error: "%{resource_name} could not be updated."
+      update_files:
+        success: "Your changes have been made."
+      destroy:
+        success: "%{resource_name} was successfully deleted."
+        error: "%{resource_name} could not be deleted."
+    annotation_categories:
+      create:
+        error: "%{resource_name} could not be created due to the following error(s): %{errors}."
+      update:
+        error: "%{resource_name} could not be updated due to the following error(s): %{errors}."
+    assignments:
+      create:
+        error: "%{resource_name} could not be created due to the following error(s): %{errors}."
+      update:
+        error: "%{resource_name} could not be updated due to the following error(s): %{errors}."
+    criteria:
+      destroy:
+        success: "Criterion and all associated marks were successfully deleted."
+    students:
+      create:
+        error: "%{resource_name} could not be created due to the following error(s): %{errors}."
+      update:
+        error: "%{resource_name} could not be updated due to the following error(s): %{errors}."
+    admins:
+      create:
+        error: "%{resource_name} could not be created due to the following error(s): %{errors}."
+      update:
+        error: "%{resource_name} could not be updated due to the following error(s): %{errors}."
+    tas:
+      create:
+        error: "%{resource_name} could not be created due to the following error(s): %{errors}."
+      update:
+        error: "%{resource_name} could not be updated due to the following error(s): %{errors}."

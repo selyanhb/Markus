@@ -1,0 +1,50 @@
+<% content_for :head do %>
+  <%= render partial: 'boot',
+             formats: [:js],
+             handlers: [:erb] %>
+<% end %>
+
+<% content_for :title,
+  t('assignments.marking_scheme', identifier: @assignment.is_peer_review? ?
+    @assignment.parent_assignment.short_identifier + ' ' + PeerReview.model_name.human :
+    @assignment.short_identifier) %>
+
+<% @heading_buttons = [
+  { link_text: t('criteria.new.button'),
+    link_path: '#',
+    html_options: { onclick:
+      "if(document.getElementById('new_criterion') != null) {
+        document.getElementById('new_criterion_prompt').focus();
+      } else {
+        $.ajax({
+          url: '" + new_assignment_criterion_path(@assignment) + "',
+          type: 'GET'
+        });
+      } "} },
+  { link_text: t('download'),
+    link_path: '#',
+    html_options: { id: 'downloadModal' } },
+  { link_text: t('upload'),
+    link_path: '#',
+    html_options: { id: 'uploadModal' } }
+] %>
+
+<div class='wrapper'>
+  <p id='new_criterion_error' class='warning' style='display: none;'></p>
+</div>
+
+<div class='pane-wrapper'>
+  <div id='criteria_pane'>
+    <%= render partial: 'criteria_pane' %>
+  </div>
+
+  <div class='pane'>
+    <div id='editing_pane_menu'>
+      <%= render partial: 'manager_help' %>
+    </div>
+  </div>
+</div>
+
+<!-- Modals -->
+<%= render partial: 'download_modal', layout: 'layouts/modal_dialog'  %>
+<%= render partial: 'upload_modal', layout: 'layouts/modal_dialog'  %>

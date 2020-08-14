@@ -1,15 +1,19 @@
 class TasController < ApplicationController
-  include UsersHelper
-  before_filter  :authorize_only_for_admin
-
-  def index
-    @tas = Ta.all(:order => 'user_name')
+  before_action do |_|
+    authorize! with: UserPolicy
   end
 
-  def populate
-    @tas_data = Ta.all(:order => 'user_name')
-    # construct_table_rows defined in UsersHelper
-    @tas = construct_table_rows(@tas_data)
+  layout 'assignment_content'
+
+  responders :flash, :collection
+
+  def index
+    respond_to do |format|
+      format.html
+      format.json {
+        render json: Ta.select(:id, :user_name, :first_name, :last_name, :email)
+      }
+    end
   end
 
   def new
@@ -20,71 +24,78 @@ class TasController < ApplicationController
     @user = Ta.find_by_id(params[:id])
   end
 
-  def update
-    @user = Ta.find_by_id(params[:user][:id])
-    attrs = params[:user]
-    # update_attributes supplied by ActiveRecords
-    if @user.update_attributes(attrs)
-      flash[:success] = I18n.t('tas.update.success',
-                               :user_name => @user.user_name)
+  def destroy
+    @user = Ta.find(params[:id])
+    @user.destroy
+    respond_with(@user)
+  end
 
-      redirect_to :action => :index
-    else
-      flash[:error] = I18n.t('tas.update.error')
-      render :edit
-    end
+  def update
+    @user = Ta.find(params[:user][:id])
+    @user.update(user_params)
+    respond_with(@user)
   end
 
   def create
-    # Default attributes: role = TA or role = STUDENT
-    # params[:user] is a hash of values passed to the controller
-    # by the HTML form with the help of ActiveView::Helper::
-    @user = Ta.new(params[:user])
-    # Return unless the save is successful; save inherted from
-    # active records--creates a new record if the model is new, otherwise
-    # updates the existing record
-    if @user.save
-      flash[:success] = I18n.t('tas.create.success',
-                               :user_name => @user.user_name)
-      redirect_to :action => 'index' # Redirect
-    else
-      flash[:error] = I18n.t('tas.create.error')
-      render :new
-    end
+    @user = Ta.create(user_params)
+    respond_with(@user)
   end
 
-  #downloads users with the given role as a csv list
-  def download_ta_list
-    #find all the users
-    tas = Ta.all(:order => 'user_name')
+  def download
+    tas = Ta.order(:user_name)
     case params[:format]
     when 'csv'
-      output = User.generate_csv_list(tas)
+      output = MarkusCsv.generate(tas) do |ta|
+        Ta::CSV_UPLOAD_ORDER.map do |field|
+          ta.send(field)
+        end
+      end
       format = 'text/csv'
-    when 'xml'
-      output = tas.to_xml
-      format = 'text/xml'
     else
-      # Raise exception?
-      output = tas.to_xml
-      format = 'text/xml'
+      output = []
+      tas.all.each do |ta|
+        output.push(user_name: ta.user_name, last_name: ta.last_name, first_name: ta.first_name, email: ta.email)
+      end
+      output = output.to_yaml
+      format = 'text/yaml'
     end
-    send_data(output, :type => format, :disposition => 'inline')
+    send_data(output,
+              type: format,
+              filename: "ta_list.#{params[:format]}",
+              disposition: 'attachment')
   end
 
-  def upload_ta_list
-    if request.post? && !params[:userlist].blank?
-      result = User.upload_user_list(Ta, params[:userlist], params[:encoding])
-      if result == false
-        flash[:notice] = I18n.t('csv.invalid_csv')
-        redirect_to :action => 'index'
-        return
+  def upload
+    begin
+      data = process_file_upload
+    rescue Psych::SyntaxError => e
+      flash_message(:error, t('upload_errors.syntax_error', error: e.to_s))
+    rescue StandardError => e
+      flash_message(:error, e.message)
+    else
+      if data[:type] == '.csv'
+        result = User.upload_user_list(Ta, params[:upload_file].read, params[:encoding])
+        flash_message(:error, result[:invalid_lines]) unless result[:invalid_lines].empty?
+        flash_message(:success, result[:valid_lines]) unless result[:valid_lines].empty?
+        flash_message(:error, result[:invalid_records]) unless result[:invalid_records].empty?
       end
-      if result[:invalid_lines].length > 0
-        flash[:invalid_lines] = result[:invalid_lines]
-      end
-      flash[:notice] = result[:upload_notice]
     end
-    redirect_to :action => 'index'
+    redirect_to action: 'index'
+  end
+
+  def refresh_graph
+    @assignment = Assignment.find(params[:assignment])
+    @current_ta = Ta.find(params[:id])
+  end
+
+  private
+
+  def user_params
+    params.require(:user).permit(:user_name, :last_name, :first_name, :email)
+  end
+
+  def flash_interpolation_options
+    { resource_name: @user.user_name.blank? ? @user.model_name.human : @user.user_name,
+      errors: @user.errors.full_messages.join('; ')}
   end
 end

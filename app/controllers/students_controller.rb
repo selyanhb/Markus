@@ -1,55 +1,49 @@
 class StudentsController < ApplicationController
-  include UsersHelper
-  before_filter    :authorize_only_for_admin
-
-  def note_message
-    @student = Student.find(params[:id])
-    if params[:success]
-      flash[:success] = I18n.t('notes.create.success')
-    else
-      flash[:error] = I18n.t('notes.error')
-    end
+  before_action do |_|
+    authorize! with: UserPolicy
   end
+
+  layout 'assignment_content'
+
+  responders :flash, :collection
 
   def index
-    @students = Student.all(:order => 'user_name')
-    @sections = Section.all(:order => 'name')
-  end
-
-  def populate
-    # Process:
-    # 1. AJAX call made by jQuery to populate the student table
-    # 2. Find students from the database
-    # 3. Pass in the student data into the helper function (construct_table_rows defined in UsersHelper)
-    @students_data = Student.all(:order => 'user_name',
-                                 :include => [:section,
-                                              :grace_period_deductions])
-
-    # Function below contained within helpers/users_helper.rb
-    @students = construct_table_rows(@students_data)
     respond_to do |format|
-      format.json { render :json => @students }
+      format.html
+      format.json {
+        student_data = Student.includes(:grace_period_deductions, :section).map do |s|
+          {
+            _id: s.id,
+            user_name: s.user_name,
+            first_name: s.first_name,
+            last_name: s.last_name,
+            email: s.email,
+            id_number: s.id_number,
+            hidden: s.hidden,
+            section: s.section_id,
+            grace_credits: s.grace_credits,
+            remaining_grace_credits: s.remaining_grace_credits
+          }
+        end
+        sections = Hash[Section.all.map { |section| [section.id, section.name] }]
+        render json: {
+          students: student_data,
+          sections: sections
+        }
+      }
     end
   end
 
   def edit
     @user = Student.find_by_id(params[:id])
-    @sections = Section.all(:order => 'name')
+    @sections = Section.order(:name)
   end
 
   def update
-    @user = Student.find_by_id(params[:id])
-    attrs = params[:user]
-    # update_attributes supplied by ActiveRecords
-    if @user.update_attributes(attrs)
-      flash[:success] = I18n.t('students.update.success',
-                               :user_name => @user.user_name)
-      redirect_to :action => 'index'
-    else
-      flash[:error] = I18n.t('students.update.error')
-      @sections = Section.all(:order => 'name')
-      render :edit
-    end
+    @user = Student.find(params[:id])
+    @user.update(user_params)
+    @sections = Section.order(:name)
+    respond_with(@user)
   end
 
   def bulk_modify
@@ -59,47 +53,32 @@ class StudentsController < ApplicationController
         raise I18n.t('students.no_students_selected')
       end
       case params[:bulk_action]
-        when 'hide'
-          Student.hide_students(student_ids)
-          @students = construct_table_rows(Student.find(student_ids))
-          return
-        when 'unhide'
-          Student.unhide_students(student_ids)
-          @students = construct_table_rows(Student.find(student_ids))
-          return
-        when 'give_grace_credits'
-          Student.give_grace_credits(student_ids, params[:number_of_grace_credits])
-          @students = construct_table_rows(Student.find(student_ids))
-          return
-        when 'add_section'
-          Student.update_section(student_ids, params[:section])
-          @students = construct_table_rows(Student.find(student_ids))
+      when 'hide'
+        Student.hide_students(student_ids)
+      when 'unhide'
+        Student.unhide_students(student_ids)
+      when 'give_grace_credits'
+        Student.give_grace_credits(student_ids,
+                                   params[:grace_credits])
+      when 'update_section'
+        Student.update_section(student_ids, params[:section])
       end
+      head :ok
     rescue RuntimeError => e
-      @error = e.message
-      render :display_error
+      flash_now(:error, e.message)
+      head 500
     end
   end
 
   def new
-    @user = Student.new(params[:user])
-    @sections = Section.all(:order => 'name')
+    @user = Student.new
+    @sections = Section.order(:name)
   end
 
   def create
-    # Default attributes: role = TA or role = STUDENT
-    # params[:user] is a hash of values passed to the controller
-    # by the HTML form with the help of ActiveView::Helper::
-    @user = Student.new(params[:user])
-    if @user.save
-      flash[:success] = I18n.t('students.create.success',
-                               :user_name => @user.user_name)
-      redirect_to :action => 'index' # Redirect
-    else
-      @sections = Section.all(:order => 'name')
-      flash[:error] = I18n.t('students.create.error')
-      render :new
-    end
+    @user = Student.create(user_params)
+    @sections = Section.order(:name)
+    respond_with(@user)
   end
 
   # dummy action for remote rjs calls
@@ -109,48 +88,89 @@ class StudentsController < ApplicationController
      @section = Section.new
   end
 
-  #downloads users with the given role as a csv list
-  def download_student_list
-    #find all the users
-    students = Student.all(:order => 'user_name')
+  def download
+    students = Student.order(:user_name).includes(:section)
     case params[:format]
-    when 'csv'
-      output = User.generate_csv_list(students)
-      format = 'text/csv'
-    when 'xml'
-      output = students.to_xml
-      format = 'text/xml'
-    else
-      # Raise exception?
-      output = students.to_xml
-      format = 'text/xml'
+      when 'csv'
+        output = MarkusCsv.generate(students) do |student|
+          Student::CSV_UPLOAD_ORDER.map do |field|
+            if field == :section_name
+              student.section&.name
+            else
+              student.send(field)
+            end
+          end
+        end
+        format = 'text/csv'
+      else
+        output = []
+        students.all.each do |student|
+          output.push(user_name: student.user_name,
+                      last_name: student.last_name,
+                      first_name: student.first_name,
+                      email: student.email,
+                      id_number: student.id_number,
+                      section_name: student.section&.name)
+        end
+        output = output.to_yaml
+        format = 'text/yaml'
     end
-    send_data(output, :type => format, :disposition => 'inline')
+    send_data(output,
+              type: format,
+              filename: "student_list.#{params[:format]}",
+              disposition: 'attachment')
   end
 
-  def upload_student_list
-    if request.post? && !params[:userlist].blank?
-      begin
-        result = User.upload_user_list(Student, params[:userlist], params[:encoding])
-        if result[:invalid_lines].size > 0
-          flash[:error] = I18n.t('csv_invalid_lines') +
-            result[:invalid_lines].join(', ')
-        end
-        flash[:success] = result[:upload_notice]
-      rescue RuntimeError
-        flash[:notice] = I18n.t('csv_valid_format')
+  def upload
+    begin
+      data = process_file_upload
+    rescue Psych::SyntaxError => e
+      flash_message(:error, t('upload_errors.syntax_error', error: e.to_s))
+    rescue StandardError => e
+      flash_message(:error, e.message)
+    else
+      if data[:type] == '.csv'
+        result = User.upload_user_list(Student, params[:upload_file].read, params[:encoding])
+        flash_message(:error, result[:invalid_lines]) unless result[:invalid_lines].empty?
+        flash_message(:success, result[:valid_lines]) unless result[:valid_lines].empty?
+        flash_message(:error, result[:invalid_records]) unless result[:invalid_records].empty?
       end
-
     end
-    redirect_to :action => 'index'
+    redirect_to action: 'index'
   end
 
   def delete_grace_period_deduction
-    grace_deduction = GracePeriodDeduction.find(params[:deduction_id])
-    student_id = grace_deduction.membership.user.id
+    student = Student.find(params[:id])
+    grace_deduction = student.grace_period_deductions.find(params[:deduction_id])
     grace_deduction.destroy
-    student = Student.find(student_id)
     @grace_period_deductions = student.grace_period_deductions
   end
 
+  def mailer_settings; end
+
+  def update_mailer_settings
+    student = current_user
+    new_settings = params[:student]
+    student.update!(receives_results_emails: new_settings[:receives_results_emails],
+                    receives_invite_emails: new_settings[:receives_invite_emails])
+    flash_message(:success, t('students.verify_settings_update'))
+    redirect_to action: 'mailer_settings'
+  end
+
+  private
+
+  def user_params
+    params.require(:user).permit(:user_name,
+                                 :last_name,
+                                 :first_name,
+                                 :email,
+                                 :id_number,
+                                 :grace_credits,
+                                 :section_id)
+  end
+
+  def flash_interpolation_options
+    { resource_name: @user.user_name.blank? ? @user.model_name.human : @user.user_name,
+      errors: @user.errors.full_messages.join('; ')}
+  end
 end

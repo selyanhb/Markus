@@ -1,0 +1,102 @@
+en:
+  exam_templates:
+    update:
+      success:
+        "Exam Template has been successfully updated"
+      failure:
+        "Exam Template has not been successfully updated"
+      instruction:
+        "Replace template file"
+    delete:
+      general:
+        "Delete Exam Template"
+      success:
+        "Exam Template successfully deleted"
+      failure:
+        "Exam Template not successfully deleted"
+      confirm:
+        "Are you sure you want to delete %{name}?"
+    create:
+      add_new:
+        "Add Exam Template"
+      success:
+        "Exam Template successfully created"
+      failure:
+        "Exam Template not successfully created"
+      upload:
+        "Upload Template"
+      add_division:
+        "Add Template Division"
+
+    download: "Download Exam Template"
+
+    generate:
+      success:
+        "Successfully generated %{copies} exam copies"
+      title:
+        "Generate Exam Copies"
+      copies_label:
+        "Number of Copies"
+      index_label:
+        "Start Index"
+      generate:
+        "Generate"
+      generate_job_started:
+        "Generating exam pdfs for exam %{exam_name} has begun."
+
+    parsing:
+      title:
+        "Automatic Parsing Selection"
+      general:
+        "Automatically parse student information"
+      save:
+        "Save"
+
+    split:
+      success:
+        "Exam Template is successfully split"
+      failure:
+        "Exam Template is not successfully split"
+      invalid:
+        "Invalid file type"
+      missing:
+        "Missing File"
+      title:
+        "Split Exam"
+      instruction:
+        "Upload PDF Exam"
+      split:
+        "Split"
+
+    split_pdf_log:
+      view_logs:
+        "View Logs"
+      scan_error:
+        "Some files have not been scanned properly."
+
+    back_to_exam_templates_page: "Back to Exam Templates page"
+    back_to_log_page: "Back to Log page"
+
+    assign_errors:
+      fix_errors:     "Fix"
+      document_info:  "Document Info"
+      copy_number:    "Copy Number"
+      page_number:    "Page Number"
+      upside_down:    "Page Upside Down?"
+
+    assign_scans:
+      done: "All groups have been successfully assigned students"
+      help: "Assign students to scanned exam groups based on printed student names."
+      skip_group: "Skip group"
+      title: "Assign Scans"
+      not_all_submissions_collected: "Not all submissions have been collected."
+      no_cover_page: "This submission does not have a cover page."
+
+  flash:
+    exam_templates:
+      update:
+        success: "Exam Template has been successfully updated"
+        error: "Exam Template has not been successfully updated"
+      assign_errors:
+        success: "All error files have been successfully assigned"
+

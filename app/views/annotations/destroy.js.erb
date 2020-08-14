@@ -1,0 +1,11 @@
+resultComponent.destroyAnnotation(
+  <%= @annotation.id %>,
+  { start: '<%= @annotation.line_start %>',
+    end: '<%= @annotation.line_end %>' },
+  <%= @annotation.annotation_text.id %>
+);
+
+hide_all_annotation_content_editors();
+reloadDOM();
+// Need to remove data attribute from highlight elements - must be last.
+$('span').removeAttr('data-annotationid<%= @annotation.id %>');

@@ -1,37 +1,21 @@
-include CsvHelper
-require 'iconv'
-# Represents a flexible criterion used to mark an assignment that
-# has the marking_scheme_type attribute set to 'flexible'.
-class FlexibleCriterion < ActiveRecord::Base
+# Represents a flexible criterion used to mark an assignment.
+class FlexibleCriterion < Criterion
 
-  set_table_name 'flexible_criteria' # set table name correctly
-  belongs_to :assignment, :counter_cache => true
+  has_many :annotation_categories
 
-  has_many :marks, :as => :markable, :dependent => :destroy
+  before_destroy :reassign_annotation_category
 
-  has_many :criterion_ta_associations,
-           :as => :criterion,
-           :dependent => :destroy
+  DEFAULT_MAX_MARK = 1
 
-  has_many :tas, :through => :criterion_ta_associations
+  def reassign_annotation_category
+    self.annotation_categories.each do |category|
+      category.update!(flexible_criterion_id: nil)
+    end
+  end
 
-  validates_associated :assignment,
-                  :message => 'association is not strong with an assignment'
-  validates_uniqueness_of :flexible_criterion_name,
-                          :scope => :assignment_id,
-                          :message => 'is already taken'
-  validates_presence_of :flexible_criterion_name, :assignment_id, :max
-  validates_numericality_of :assignment_id,
-                        :only_integer => true,
-                        :greater_than => 0,
-                        :message => 'can only be whole number greater than 0'
-  validates_numericality_of :max,
-                            :message => 'must be a number greater than 0.0',
-                            :greater_than => 0.0
-
-#  before_save :update_assigned_groups_count
-
-  DEFAULT_MAX = 1
+  def self.symbol
+    :flexible
+  end
 
   def update_assigned_groups_count
     result = []
@@ -41,131 +25,90 @@ class FlexibleCriterion < ActiveRecord::Base
     self.assigned_groups_count = result.uniq.length
   end
 
-  # Creates a CSV string from all the flexible criteria related to an assignment.
-  #
-  # ===Returns:
-  #
-  # A string. see new_from_csv_row for format reference.
-  def self.create_csv(assignment)
-    csv_string = CsvHelper::Csv.generate do |csv|
-      # TODO temporary until Assignment gets its criteria method
-      criteria = FlexibleCriterion.find_all_by_assignment_id(assignment.id, :order => :position)
-      criteria.each do |c|
-        criterion_array = [c.flexible_criterion_name, c.max, c.description]
-        csv << criterion_array
-      end
-    end
-    return csv_string
-  end
-
   # Instantiate a FlexibleCriterion from a CSV row and attach it to the supplied
   # assignment.
   #
   # ===Params:
   #
   # row::         An array representing one CSV file row. Should be in the following
-  #               format: [name, max, description] where description is optional.
+  #               format: [name, max_mark, description] where description is optional.
   # assignment::  The assignment to which the newly created criterion should belong.
   #
   # ===Raises:
   #
-  # CSV::IllegalFormatError:: DEPRECATED in Ruby 1.8.7
-  #                           REMOVED in Ruby 1.9.2
-  #
-  # CSV::MalformedCSVError::  If the row does not contains enough information, if the max value
-  #                           is zero (or doesn't evaluate to a float) or if the
-  #                           supplied name is not unique.
-  def self.new_from_csv_row(row, assignment)
+  # CsvInvalidLineError  If the row does not contain enough information,
+  #                      if the maximum mark is zero, nil or does not evaluate to a
+  #                      float, or if the criterion is not successfully saved.
+  def self.create_or_update_from_csv_row(row, assignment)
     if row.length < 2
-      if RUBY_VERSION > '1.9'
-        raise CSV::MalformedCSVError.new(I18n.t('criteria_csv_error.incomplete_row'))
-      else
-        raise CSV::IllegalFormatError.new(I18n.t('criteria_csv_error.incomplete_row'))
-      end
+      raise CsvInvalidLineError, I18n.t('upload_errors.invalid_csv_row_format')
     end
-    criterion = FlexibleCriterion.new
-    criterion.assignment = assignment
-    criterion.flexible_criterion_name = row[0]
-    # assert that no other criterion uses the same name for the same assignment.
-    if FlexibleCriterion.find_all_by_assignment_id_and_flexible_criterion_name(assignment.id, criterion.flexible_criterion_name).size != 0
-      if RUBY_VERSION > '1.9'
-        raise CSV::MalformedCSVError.new(I18n.t('criteria_csv_error.name_not_unique'))
-      else
-        raise CSV::IllegalFormatError.new(I18n.t('criteria_csv_error.name_not_unique'))
-      end
+    working_row = row.clone
+    name = working_row.shift
+    # If a FlexibleCriterion with the same name exits, load it up.  Otherwise,
+    # create a new one.
+    criterion = assignment.criteria.find_or_create_by(name: name, type: 'FlexibleCriterion')
+    # Check that max is not a string.
+    begin
+      criterion.max_mark = Float(working_row.shift)
+    rescue ArgumentError
+      raise CsvInvalidLineError, I18n.t('upload_errors.invalid_csv_row_format')
     end
-    criterion.max = row[1]
-    if criterion.max == 0
-      if RUBY_VERSION > '1.9'
-        raise CSV::MalformedCSVError.new(I18n.t('criteria_csv_error.max_zero'))
-      else
-        raise CSV::IllegalFormatError.new(I18n.t('criteria_csv_error.max_zero'))
-      end
+    # Check that the maximum mark given is a valid number.
+    if criterion.max_mark.nil? or criterion.max_mark.zero?
+      raise CsvInvalidLineError, I18n.t('upload_errors.invalid_csv_row_format')
     end
-    criterion.description = row[2] if !row[2].nil?
-    criterion.position = next_criterion_position(assignment)
+    # Only set the position if this is a new record.
+    if criterion.new_record?
+      criterion.position = assignment.next_criterion_position
+    end
+    # Set description to the one cloned only if the original description is valid.
+    criterion.description = working_row.shift unless row[2].nil?
     unless criterion.save
-      if RUBY_VERSION > '1.9'
-        raise CSV::MalformedCSVError.new(criterion.errors)
-      else
-        raise CSV::IllegalFormatError.new(criterion.errors)
-      end
+      raise CsvInvalidLineError
     end
-    return criterion
+    criterion
   end
 
-  # Parse a flexible criteria CSV file.
+  # Instantiate a FlexibleCriterion from a YML entry
   #
   # ===Params:
   #
-  # file::          A file object which will be tried for parsing.
-  # assignment::    The assignment to which the new criteria should belong to.
-  # invalid_lines:: An object to recieve all encountered _invalid_ lines.
-  #                 Strings representing the faulty line followed by
-  #                 a human readable error message are appended to the object
-  #                 via the << operator.
-  #
-  #                 *Hint*: An array allows for easy
-  #                 access to single invalid lines.
-  #
-  # ===Returns:
-  #
-  # The number of successfully created criteria.
-  def self.parse_csv(file, assignment, invalid_lines = nil)
-    nb_updates = 0
-    CsvHelper::Csv.parse(file.read) do |row|
-      next if CsvHelper::Csv.generate_line(row).strip.empty?
-      if RUBY_VERSION > '1.9'
-        begin
-          FlexibleCriterion.new_from_csv_row(row, assignment)
-          nb_updates += 1
-        rescue CSV::MalformedCSVError => e
-          invalid_lines << row.join(',') + ': ' + e.message unless invalid_lines.nil?
-        end
-      else
-        begin
-          FlexibleCriterion.new_from_csv_row(row, assignment)
-          nb_updates += 1
-        rescue CSV::IllegalFormatError => e
-          invalid_lines << row.join(',') + ': ' + e.message unless invalid_lines.nil?
-        end
-      end
-    end
-    return nb_updates
+  # criterion_yml:: Information corresponding to a single FlexibleCriterion
+  #                 in the following format:
+  #                 criterion_name:
+  #                   type: criterion_type
+  #                   max_mark: #
+  #                   description: level_description
+  def self.load_from_yml(criterion_yml)
+    name = criterion_yml[0]
+    # Create a new RubricCriterion
+    criterion = FlexibleCriterion.new
+    criterion.name = name
+    criterion.max_mark = criterion_yml[1]['max_mark']
+
+    # Set the description to the one given, or to an empty string if
+    # a description is not given.
+    criterion.description =
+      criterion_yml[1]['description'].nil? ? '' : criterion_yml[1]['description']
+    # Visibility options
+    criterion.ta_visible = criterion_yml[1]['ta_visible'] unless criterion_yml[1]['ta_visible'].nil?
+    criterion.peer_visible = criterion_yml[1]['peer_visible'] unless criterion_yml[1]['peer_visible'].nil?
+    criterion
   end
 
-  # ===Returns:
-  #
-  # The position that should receive the next criterion for an assignment.
-  def self.next_criterion_position(assignment)
-    # TODO temporary, until Assignment gets its criteria method
-    #      nevermind the fact that this computation should really belong in assignment
-    last_criterion = FlexibleCriterion.find_last_by_assignment_id(assignment.id, :order => :position)
-    return last_criterion.position + 1 unless last_criterion.nil?
-    1
+  # Returns a hash containing the information of a single flexible criterion.
+  def to_yml
+    { self.name =>
+      { 'type'         => 'flexible',
+        'max_mark'     => self.max_mark.to_f,
+        'description'  => self.description.blank? ? '' : self.description,
+        'ta_visible'   => self.ta_visible,
+        'peer_visible' => self.peer_visible }
+    }
   end
 
-  def get_weight
+  def weight
     1
   end
 
@@ -177,66 +120,21 @@ class FlexibleCriterion < ActiveRecord::Base
     result.uniq
   end
 
-  def add_tas(ta_array)
-    ta_array = Array(ta_array)
-    associations = criterion_ta_associations.all(:conditions => {:ta_id => ta_array})
-    ta_array.each do |ta|
-      if (ta.criterion_ta_associations & associations).size < 1
-        criterion_ta_associations.create(:ta => ta, :criterion => self, :assignment => self.assignment)
-      end
-    end
-  end
-
-  def get_name
-    flexible_criterion_name
-  end
-
-  def remove_tas(ta_array)
-    ta_array = Array(ta_array)
-    associations_for_criteria = criterion_ta_associations.all(:conditions => {:ta_id => ta_array})
-    ta_array.each do |ta|
-      # & is the mathematical set intersection operator between two arrays
-      assoc_to_remove = (ta.criterion_ta_associations & associations_for_criteria)
-      if assoc_to_remove.size > 0
-        criterion_ta_associations.delete(assoc_to_remove)
-        assoc_to_remove.first.destroy
-      end
-    end
-  end
-
-  def get_ta_names
-    criterion_ta_associations.collect {|association| association.ta.user_name}
-  end
-
   def has_associated_ta?(ta)
-    unless ta.ta?
-      return false
-    end
-    !(criterion_ta_associations.find_by_ta_id(ta.id) == nil)
+    return false unless ta.ta?
+    !(criterion_ta_associations.where(ta_id: ta.id).first == nil)
   end
 
-  def add_tas_by_user_name_array(ta_user_name_array)
-    result = ta_user_name_array.map{|ta_user_name|
-      Ta.find_by_user_name(ta_user_name)}.compact
-    add_tas(result)
-  end
+  def scale_marks
+    return unless max_mark_previously_changed? && !previous_changes[:max_mark].first.nil? # if max_mark was not updated
 
-  # Returns an array containing the criterion names that didn't exist
-  def self.assign_tas_by_csv(csv_file_contents, assignment_id, encoding)
-    failures = []
-    if encoding != nil
-      csv_file_contents = StringIO.new(Iconv.iconv('UTF-8', encoding, csv_file_contents.read).join)
-    end
-    CsvHelper::Csv.parse(csv_file_contents) do |row|
-      criterion_name = row.shift # Knocks the first item from array
-      criterion = FlexibleCriterion.find_by_assignment_id_and_flexible_criterion_name(assignment_id, criterion_name)
-      if criterion.nil?
-        failures.push(criterion_name)
-      else
-        criterion.add_tas_by_user_name_array(row) # The rest of the array
+    super
+    return if self&.annotation_categories.nil?
+    annotation_categories = self.annotation_categories.includes(:annotation_texts)
+    annotation_categories.each do |category|
+      category.annotation_texts.each do |text|
+        text.scale_deduction(previous_changes['max_mark'][1] / previous_changes['max_mark'][0])
       end
     end
-    return failures
   end
-
 end

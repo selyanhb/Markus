@@ -11,7 +11,7 @@ include Repository
 
 # Test suite for testing proper functioning of
 # SubversionRepository, an implementation of AbstractRepository
-class SubversionRepositoryTest < Test::Unit::TestCase
+class SubversionRepositoryTest < ActiveSupport::TestCase
 
   SVN_TEST_REPOS_DIR = File.expand_path(File.join(File.dirname(__FILE__),"/svn_repos"))
   TEST_REPO = SVN_TEST_REPOS_DIR + "/repo1"
@@ -36,7 +36,7 @@ class SubversionRepositoryTest < Test::Unit::TestCase
     should "be able to open an existing Subversion repository" do
       SubversionRepository.create(TEST_REPO)
       repo = SubversionRepository.open(TEST_REPO)
-      assert_not_nil(repo, "Cannot open supversion repository")
+      assert_not_nil(repo, "Cannot open subversion repository")
       assert_instance_of(Repository::SubversionRepository,
                          repo,
                          "Repository is of wrong type")
@@ -78,12 +78,12 @@ class SubversionRepositoryTest < Test::Unit::TestCase
       FileUtils.mkdir_p(TEST_EXPORT_REPO_2)
       # configure and create repositories
       conf_admin = Hash.new
-      conf_admin["IS_REPOSITORY_ADMIN"] = true
+      conf_admin['is_repository_admin'] = true
       conf_admin["REPOSITORY_PERMISSION_FILE"] = SVN_AUTHZ_FILE
       # create repository first
-      Repository.get_class("svn", conf_admin).create(TEST_REPO)
+      SubversionRepository.create(TEST_REPO)
       # open the repository
-      @repo = Repository.get_class("svn", conf_admin).open(TEST_REPO)
+      @repo = SubversionRepository.open(TEST_REPO)
     end
 
     # removes the SVN repository at TEST_REPO
@@ -158,24 +158,24 @@ class SubversionRepositoryTest < Test::Unit::TestCase
       revision = @repo.get_latest_revision()
       assert_not_nil(revision, "Could not retrieve latest revision")
       assert_instance_of(Repository::SubversionRevision, revision, "Revision is of wrong type!")
-      assert_equal(revision.revision_number, 0, "Wrong revision number")
+      assert_equal(revision.revision_identifier, 0, "Wrong revision number")
       @repo.close()
     end
 
     should "be able to retrieve a revision given a valid revision as integer number" do
       r = @repo.get_latest_revision()
       assert_not_nil(r, "Could not retrieve latest revision")
-      rev_int = r.revision_number
+      rev_int = r.revision_identifier
       new_revision = @repo.get_revision(rev_int)
       assert_instance_of(Repository::SubversionRevision, new_revision, "Revision not of class SubversionRevision")
-      assert_equal(new_revision.revision_number, rev_int, "Revision numbers (int values) should be equal")
+      assert_equal(new_revision.revision_identifier, rev_int, "Revision numbers (int values) should be equal")
       @repo.close()
     end
 
     should "raise a RevisionDoesNotExist exception" do
       r = @repo.get_latest_revision()
       assert_not_nil(r, "Could not retrieve latest revision")
-      revision_non_existent = r.revision_number + 3
+      revision_non_existent = r.revision_identifier + 3
       assert_raise(RevisionDoesNotExist) do
         @repo.get_revision(revision_non_existent) # raises exception
       end
@@ -210,15 +210,15 @@ class SubversionRepositoryTest < Test::Unit::TestCase
 
     add_file_test = "add a new file to an empty repository"
     should(add_file_test) do
-      rev_num = @repo.get_latest_revision().revision_number
+      rev_num = @repo.get_latest_revision().revision_identifier
       txn = @repo.get_transaction(TEST_USER)
       filename = "MyClass.java"
       file_contents = File.read(RESOURCE_DIR + "/" + filename)
       txn.add(filename, file_contents)
-      latest_revision = @repo.get_latest_revision().revision_number
+      latest_revision = @repo.get_latest_revision().revision_identifier
       assert_equal(rev_num, latest_revision, "Revision # should be the same!")
       @repo.commit(txn) # svn commit
-      latest_revision = @repo.get_latest_revision().revision_number
+      latest_revision = @repo.get_latest_revision().revision_identifier
 
       assert_not_equal(rev_num, latest_revision, "Revision # has not changed!")
 
@@ -239,7 +239,7 @@ class SubversionRepositoryTest < Test::Unit::TestCase
       filename = "MyClass.java"
       add_file_helper(@repo, filename)
       txn = @repo.get_transaction(TEST_USER)
-      txn.remove(filename, @repo.get_latest_revision().revision_number)
+      txn.remove(filename, @repo.get_latest_revision().revision_identifier)
       @repo.commit(txn)
 
       # filename should not be available in repo now
@@ -256,7 +256,7 @@ class SubversionRepositoryTest < Test::Unit::TestCase
       new_revision = @repo.get_latest_revision()
       assert_instance_of(Repository::SubversionRevision, old_revision, "Should be of type SubversionRevision")
       assert_instance_of(Repository::SubversionRevision, new_revision, "Should be of type SubversionRevision")
-      assert_equal(old_revision.revision_number + 1, new_revision.revision_number, "Revision number should increase by 1")
+      assert_equal(old_revision.revision_identifier + 1, new_revision.revision_identifier, "Revision number should increase by 1")
       # repository should know of the added files, now
       files = new_revision.files_at_path("/")
       files_to_add.each do |file|
@@ -278,13 +278,13 @@ class SubversionRepositoryTest < Test::Unit::TestCase
       file_contents = File.read(RESOURCE_DIR + "/" + filename)
       txn.add(filename, file_contents)
       # remove a file
-      txn.remove("test.xml", @repo.get_latest_revision().revision_number) # remove a file previously existent in current rev.
+      txn.remove("test.xml", @repo.get_latest_revision().revision_identifier) # remove a file previously existent in current rev.
       @repo.commit(txn)
 
       new_revision = @repo.get_latest_revision()
       assert_instance_of(Repository::SubversionRevision, old_revision, "Should be of type SubversionRevision")
       assert_instance_of(Repository::SubversionRevision, new_revision, "Should be of type SubversionRevision")
-      assert_equal(old_revision.revision_number + 1, new_revision.revision_number, "Revision number should have been increased by 1")
+      assert_equal(old_revision.revision_identifier + 1, new_revision.revision_identifier, "Revision number should have been increased by 1")
       # test repository on its correct content
       files = new_revision.files_at_path("/")
       files_to_add << filename # push filename to files_to_add
@@ -313,13 +313,13 @@ class SubversionRepositoryTest < Test::Unit::TestCase
       repo_timestamp = Time.now
 
       # remove a file
-      txn.remove("test.xml", @repo.get_latest_revision().revision_number) # remove a file previously existent in current rev.
+      txn.remove("test.xml", @repo.get_latest_revision().revision_identifier) # remove a file previously existent in current rev.
       @repo.commit(txn)
 
       new_revision = @repo.get_latest_revision()
       assert_instance_of(Repository::SubversionRevision, old_revision, "Should be of type SubversionRevision")
       assert_instance_of(Repository::SubversionRevision, new_revision, "Should be of type SubversionRevision")
-      assert_equal(old_revision.revision_number + 1, new_revision.revision_number, "Revision number should have been increased by 1")
+      assert_equal(old_revision.revision_identifier + 1, new_revision.revision_identifier, "Revision number should have been increased by 1")
       # test repository on its correct content
       files = new_revision.files_at_path("/")
       files_to_add << filename # push filename to files_to_add
@@ -337,7 +337,7 @@ class SubversionRepositoryTest < Test::Unit::TestCase
       latest_rev = @repo.get_latest_revision()
       assert_instance_of(Repository::SubversionRevision, rev_num_by_timestamp, "Revision number is of wrong type")
       assert_instance_of(Repository::SubversionRevision, latest_rev, "Revision number is of wrong type")
-      assert_equal(rev_num_by_timestamp.revision_number, latest_rev.revision_number, "Revision number (int values) do not match")
+      assert_equal(rev_num_by_timestamp.revision_identifier, latest_rev.revision_identifier, "Revision number (int values) do not match")
 
       # test.xml should be in the repository for the timestamp "repo_timestamp"
       rev_num_by_timestamp = @repo.get_revision_by_timestamp(repo_timestamp)
@@ -385,26 +385,26 @@ class SubversionRepositoryTest < Test::Unit::TestCase
       FileUtils.remove_dir(SVN_TEST_REPOS_DIR + "/Testrepo1", true)
       FileUtils.remove_dir(SVN_TEST_REPOS_DIR + "/Repository2", true)
       FileUtils.remove_dir(TEST_REPO, true)
-      FileUtils.rm(SVN_AUTHZ_FILE, :force => true)
+      FileUtils.rm(SVN_AUTHZ_FILE, force: true)
       # have a clean authz file
       FileUtils.cp(SVN_AUTHZ_FILE + '.orig', SVN_AUTHZ_FILE)
       # create repository first
       repo1 = SVN_TEST_REPOS_DIR + "/Testrepo1"
       repo2 = SVN_TEST_REPOS_DIR + "/Repository2"
       conf_admin = Hash.new
-      conf_admin["IS_REPOSITORY_ADMIN"] = true
+      conf_admin['is_repository_admin'] = true
       conf_admin["REPOSITORY_PERMISSION_FILE"] = SVN_AUTHZ_FILE
-      Repository.get_class("svn", conf_admin).create(repo1)
-      Repository.get_class("svn", conf_admin).create(repo2)
-      Repository.get_class("svn", conf_admin).create(TEST_REPO)
+      SubversionRepository.create(repo1)
+      SubversionRepository.create(repo2)
+      SubversionRepository.create(TEST_REPO)
       # open the repository
       conf_non_admin = Hash.new
-      conf_non_admin["IS_REPOSITORY_ADMIN"] = false
+      conf_non_admin['is_repository_admin'] = false
       conf_non_admin["REPOSITORY_PERMISSION_FILE"] = SVN_AUTHZ_FILE
 
-      @repo1 = Repository.get_class("svn", conf_non_admin).open(repo1) # non-admin repository
-      @repo2 = Repository.get_class("svn", conf_non_admin).open(repo2) # again, a non-admin repo
-      @repo = Repository.get_class("svn", conf_admin).open(TEST_REPO)     # repo with admin-privs
+      @repo1 = SubversionRepository.open(repo1) # non-admin repository
+      @repo2 = SubversionRepository.open(repo2) # again, a non-admin repo
+      @repo = SubversionRepository.open(TEST_REPO)     # repo with admin-privs
 
       # add some files
       files_to_add = ["MyClass.java", "MyInterface.java", "test.xml"]
@@ -422,7 +422,7 @@ class SubversionRepositoryTest < Test::Unit::TestCase
       SubversionRepository.delete(SVN_TEST_REPOS_DIR + "/Testrepo1")
       SubversionRepository.delete(SVN_TEST_REPOS_DIR + "/Repository2")
       SubversionRepository.delete(TEST_REPO)
-      FileUtils.rm(SVN_AUTHZ_FILE, :force => true)
+      FileUtils.rm(SVN_AUTHZ_FILE, force: true)
     end
 
     should "be able to get permissions for a user" do
@@ -620,11 +620,11 @@ class SubversionRepositoryTest < Test::Unit::TestCase
 
       repositories = []
       conf_admin = Hash.new
-      conf_admin["IS_REPOSITORY_ADMIN"] = true
+      conf_admin['is_repository_admin'] = true
       conf_admin["REPOSITORY_PERMISSION_FILE"] = SVN_AUTHZ_FILE
       repository_names.each do |repo_name|
-        Repository.get_class("svn", conf_admin).create(repo_name)
-        repo = Repository.get_class("svn", conf_admin).open(repo_name)
+        SubversionRepository.create(repo_name)
+        repo = SubversionRepository.open(repo_name)
         repo.add_user("some_user", Repository::Permission::READ_WRITE)
         repo.add_user("another_user", Repository::Permission::READ_WRITE)
         repositories.push(repo)
@@ -657,7 +657,7 @@ class SubversionRepositoryTest < Test::Unit::TestCase
       conf = Hash.new
       conf["REPOSITORY_PERMISSION_FILE"] = 'something'
       assert_raise(ConfigurationError) do
-        Repository.get_class("svn", conf) # missing a required constant
+        Repository.get_class # missing a required constant
       end
     end
   end # end context
@@ -667,7 +667,7 @@ class SubversionRepositoryTest < Test::Unit::TestCase
       # use a different svn_authz file for this test
       new_svn_authz = SVN_TEST_REPOS_DIR + "/svn_authz_bulk_stuff2"
       @conf_admin = Hash.new
-      @conf_admin["IS_REPOSITORY_ADMIN"] = true
+      @conf_admin['is_repository_admin'] = true
       @conf_admin["REPOSITORY_PERMISSION_FILE"] = new_svn_authz
 
       # create some repositories, add some users
@@ -679,8 +679,8 @@ class SubversionRepositoryTest < Test::Unit::TestCase
 
       @repositories = []
       @repository_names.each do |repo_name|
-        Repository.get_class("svn", @conf_admin).create(SVN_TEST_REPOS_DIR + "/" + repo_name)
-        repo = Repository.get_class("svn", @conf_admin).open(SVN_TEST_REPOS_DIR + "/" + repo_name)
+        SubversionRepository.create(SVN_TEST_REPOS_DIR + "/" + repo_name)
+        repo = SubversionRepository.open(SVN_TEST_REPOS_DIR + "/" + repo_name)
         @repositories.push(repo)
       end
     end
@@ -708,7 +708,7 @@ class SubversionRepositoryTest < Test::Unit::TestCase
 
       # Test to make sure they got attached to each repository
       @repository_names.each do |repo_name|
-        repo = Repository.get_class("svn", @conf_admin).open(SVN_TEST_REPOS_DIR + "/" + repo_name)
+        repo = SubversionRepository.open(SVN_TEST_REPOS_DIR + "/" + repo_name)
         assert_equal(Repository::Permission::READ, repo.get_permissions("test_user"))
         assert_equal(Repository::Permission::READ_WRITE, repo.get_permissions("test_user2"))
         repo.close()
@@ -719,7 +719,7 @@ class SubversionRepositoryTest < Test::Unit::TestCase
 
       # Test to make sure they got attached to each repository
       @repository_names.each do |repo_name|
-        repo = Repository.get_class("svn", @conf_admin).open(SVN_TEST_REPOS_DIR + "/" + repo_name)
+        repo = SubversionRepository.open(SVN_TEST_REPOS_DIR + "/" + repo_name)
         assert_raises Repository::UserNotFound do
           repo.get_permissions("test_user")
         end

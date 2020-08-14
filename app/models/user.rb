@@ -1,30 +1,37 @@
-include CsvHelper
-require 'iconv'
 require 'digest' # required for {set,reset}_api_token
 require 'base64' # required for {set,reset}_api_token
-# required for repository actions
-require File.join(File.dirname(__FILE__), '..', '..', 'lib', 'repo', 'repository')
 
 # We always assume the following fields exists:
 # => :user_name, :last_name, :first_name
 # If there are added columns, add the default values to default_values
-class User < ActiveRecord::Base
+class User < ApplicationRecord
   before_validation :strip_name
+  before_validation :nillify_empty_email_and_id_number
 
   # Group relationships
-  has_many :memberships
-  has_many :groupings, :through => :memberships
-  has_many :notes, :as => :noteable, :dependent => :destroy
-  has_many :accepted_memberships, :class_name => 'Membership', :conditions => {:membership_status => [StudentMembership::STATUSES[:accepted], StudentMembership::STATUSES[:inviter]]}
+  has_many :memberships, dependent: :delete_all
+  has_many :grade_entry_students
+  has_many :groupings, through: :memberships
+  has_many :notes, as: :noteable, dependent: :destroy
+  has_many :accepted_memberships,
+           -> { where membership_status: [StudentMembership::STATUSES[:accepted], StudentMembership::STATUSES[:inviter]] },
+           class_name: 'Membership'
+  has_many :annotations, as: :creator
+  has_many :test_runs, dependent: :destroy
+  has_many :split_pdf_logs
+  has_many :key_pairs, dependent: :destroy
 
   validates_presence_of     :user_name, :last_name, :first_name
   validates_uniqueness_of   :user_name
+  validates_uniqueness_of   :email, :allow_nil => true
+  validates_uniqueness_of   :id_number, :allow_nil => true
 
-  validates_format_of       :type,          :with => /Student|Admin|Ta/
+  validates_format_of       :type,          with: /\AStudent|Admin|Ta|TestServer\z/
   # role constants
   STUDENT = 'Student'
   ADMIN = 'Admin'
   TA = 'Ta'
+  TEST_SERVER = 'TestServer'
 
   # Authentication constants to be used as return values
   # see self.authenticated? and main_controller for details
@@ -34,27 +41,29 @@ class User < ActiveRecord::Base
   AUTHENTICATE_ERROR =        3   # generic/unknown error
   AUTHENTICATE_BAD_CHAR =     4   # invalid character in username/password
   AUTHENTICATE_BAD_PLATFORM = 5   # external authentication works for *NIX platforms only
+  AUTHENTICATE_CUSTOM_MESSAGE = 6 # custom validate code for custom message
 
   # Verifies if user is allowed to enter MarkUs
   # Returns user object representing the user with the given login.
   def self.authorize(login)
     # fetch login in database to see if it is registered.
-    find_by_user_name(login)
+    where(user_name: login).first
   end
 
   # Authenticates login against its password
-  # through a script specified by config VALIDATE_FILE
-  def self.authenticate(login, password)
+  # through a script specified by Rails.configuration.validate_file
+  def self.authenticate(login, password, ip: nil)
     # Do not allow the following characters in usernames/passwords
     # Right now, this is \n and \0 only, since username and password
     # are delimited by \n and C programs use \0 to terminate strings
     not_allowed_regexp = Regexp.new(/[\n\0]+/)
     if not_allowed_regexp.match(login) || not_allowed_regexp.match(password)
+      m_logger = MarkusLogger.instance
       m_logger.log("User '#{login}' failed to log in. Username/password contained " +
                        'illegal characters', MarkusLogger::ERROR)
       AUTHENTICATE_BAD_CHAR
     else
-      # Open a pipe and write to stdin of the program specified by config VALIDATE_FILE.
+      # Open a pipe and write to stdin of the program specified by Rails.configuration.validate_file.
       # We could read something from the programs stdout, but there is no need
       # for that at the moment (you would do it by e.g. pipe.readlines)
 
@@ -68,10 +77,16 @@ class User < ActiveRecord::Base
       #  1 means no such user
       #  2 means bad password
       #  3 is used for other error exits
-      pipe = IO.popen(MarkusConfigurator.markus_config_validate_file, 'w+')
-      pipe.puts("#{login}\n#{password}") # write to stdin of markus_config_validate
+      pipe = IO.popen("'#{Rails.configuration.validate_file}'", 'w+') # quotes to avoid choking on spaces
+      to_stdin = [login, password, ip].reject(&:nil?).join("\n")
+      pipe.puts(to_stdin) # write to stdin of Rails.configuration.validate_file
       pipe.close
       m_logger = MarkusLogger.instance
+      if !Rails.configuration.validate_custom_exit_status.nil? &&
+          $?.exitstatus == Rails.configuration.validate_custom_exit_status
+        m_logger.log("Login failed. Reason: Custom exit status.", MarkusLogger::ERROR)
+        return AUTHENTICATE_CUSTOM_MESSAGE
+      end
       case $?.exitstatus
         when 0
           m_logger.log("User '#{login}' logged in.", MarkusLogger::INFO)
@@ -93,8 +108,8 @@ class User < ActiveRecord::Base
   #TODO: make these proper associations. They work fine for now but
   # they'll be slow in production
   def active_groupings
-    self.groupings.all(:conditions => ['memberships.membership_status != :u',
-                                       { :u => StudentMembership::STATUSES[:rejected]}])
+    groupings.where('memberships.membership_status != ?',
+                         StudentMembership::STATUSES[:rejected])
   end
 
   # Helper methods -----------------------------------------------------
@@ -111,70 +126,121 @@ class User < ActiveRecord::Base
     self.class == Student
   end
 
+  def test_server?
+    self.class == TestServer
+  end
+
   # Submission helper methods -------------------------------------------------
 
   def submission_for(aid)
     grouping = grouping_for(aid)
-    if grouping.nil?
-      return nil
-    end
+    return if grouping.nil?
     grouping.current_submission_used
   end
 
-  # Classlist parsing --------------------------------------------------------
-  def self.generate_csv_list(user_list)
-     file_out = CsvHelper::Csv.generate do |csv|
-       user_list.each do |user|
-         # csv format is user_name,last_name,first_name
-         # We check for user's section
-         # If the user has a section, we had it to the CSV
-         if !user.student? or user.section.nil?
-           user_array = [user.user_name,user.last_name,user.first_name]
-         else
-           user_array = [user.user_name,user.last_name,user.first_name, user.section.name]
-         end
-         csv << user_array
-       end
-     end
-     file_out
+  def grouping_for(aid)
+    groupings.find { |g| g.assessment_id == aid }
+  end
+
+  def is_a_reviewer?(assignment)
+    is_a?(Student) && !assignment.nil? && assignment.is_peer_review?
+  end
+
+  def is_reviewer_for?(assignment, result)
+    # aid is the peer review assignment id, and result_id
+    # is the peer review result
+    if assignment.nil?
+      return false
+    end
+    group =  grouping_for(Integer(assignment.id))
+    if group.nil?
+      return false
+    end
+    prs = PeerReview.where(reviewer_id: group.id)
+    if prs.first.nil?
+      return false
+    end
+    pr = prs.find {|p| p.result_id == Integer(result.id)}
+
+    is_a?(Student) && !pr.nil?
   end
 
   def self.upload_user_list(user_class, user_list, encoding)
-    num_update = 0
-    result = {}
-    result[:invalid_lines] = []  # store lines that were not processed
-    # read each line of the file and update classlist
-    begin
-      if encoding != nil
-        user_list = StringIO.new(Iconv.iconv('UTF-8',
-                                            encoding,
-                                            user_list.read).join)
-      end
-      User.transaction do
-        processed_users = []
-        CsvHelper::Csv.parse(user_list,
-                             :skip_blanks => true,
-                             :row_sep => :auto) do |row|
-          # don't know how to fetch line so we concat given array
-          next if CsvHelper::Csv.generate_line(row).strip.empty?
-          if processed_users.include?(row[0])
-            result[:invalid_lines] = I18n.t('csv_upload_user_duplicate',
-                                            {:user_name => row[0]})
-          else
-            if User.add_user(user_class, row).nil?
-              result[:invalid_lines] << row.join(',')
-            else
-              num_update += 1
-              processed_users.push(row[0])
-            end
-          end
-        end # end parse
-      end
-    rescue
-        return false
+    user_columns = user_class::CSV_UPLOAD_ORDER
+    users = []
+    user_names = Set.new
+    user_name_i = user_columns.find_index(:user_name)
+    section_name_i = user_columns.find_index(:section_name)
+    unless section_name_i.nil?
+      user_columns[section_name_i] = :section_id # becomes foreign key
     end
-    result[:upload_notice] = "#{num_update} user(s) added/updated."
-    result
+
+    parsed = MarkusCsv.parse(user_list, skip_blanks: true, row_sep: :auto, encoding: encoding) do |row|
+      next if row.empty?
+      raise CsvInvalidLineError if user_names.include?(row[user_name_i])
+      if row.size < user_columns.size
+        row.fill(nil, row.size...user_columns.size)
+      end
+      if row.size > user_columns.size
+        row = row[0...user_columns.size]
+      end
+      unless section_name_i.nil?
+        section = Section.find_or_create_by(name: row[section_name_i])
+        row[section_name_i] = if section.nil? then nil else section.id end
+      end
+      user_names << row[user_name_i]
+      users << row
+    end
+    if parsed[:valid_lines].blank?
+      # the csv was malformed (or empty, which is ok)
+      # we should not trust the rows processed before finding it was malformed
+      users.clear
+    else
+      parsed[:valid_lines] = '' # reset the value from MarkusCsv#parse, use import's return instead
+    end
+
+    existing_user_ids = user_class.all.pluck(:id)
+    imported = nil
+    parsed[:invalid_records] = ''
+    begin
+      User.transaction do
+        imported = user_class.import user_columns, users, on_duplicate_key_update: {
+          conflict_target: [:user_name], columns: [:last_name, :first_name, :section_id, :email, :id_number]
+        }
+        User.where(id: imported.ids).each do |user|
+          user.validate!
+        rescue ActiveRecord::RecordInvalid
+          error_message = user.errors
+                              .messages
+                              .map { |k, v| "#{k} #{v.flatten.join ','}" }.flatten.join MarkusCsv::INVALID_LINE_SEP
+          parsed[:invalid_records] += "#{user.user_name}: #{error_message}"
+        end
+        unless parsed[:invalid_records].empty?
+          raise ActiveRecord::Rollback
+        end
+      end
+      unless imported.failed_instances.empty?
+        if parsed[:invalid_lines].blank?
+          parsed[:invalid_lines] = I18n.t('upload_errors.invalid_rows')
+        else
+          parsed[:invalid_lines] += MarkusCsv::INVALID_LINE_SEP # concat to invalid_lines from MarkusCsv#parse
+        end
+        parsed[:invalid_lines] +=
+          imported.failed_instances.map { |f| f[:user_name].to_s }.join(MarkusCsv::INVALID_LINE_SEP)
+      end
+      if !imported.ids.empty? && parsed[:invalid_records].empty?
+        parsed[:valid_lines] = I18n.t('upload_success', count: imported.ids.size)
+      end
+    rescue ActiveRecord::RecordNotUnique => e
+      # can trigger on uniqueness constraint validation for :user_name, will invalidate the entire import
+      parsed[:invalid_lines] = I18n.t('csv_upload_user_duplicate', user_name: e.message)
+    end
+    if user_class == Student
+      new_user_ids = (imported&.ids || []) - existing_user_ids
+      # call create callbacks to make sure grade_entry_students get created
+      user_class.where(id: new_user_ids).each(&:create_all_grade_entry_students)
+    end
+    parsed
   end
 
   def self.add_user(user_class, row)
@@ -190,7 +256,7 @@ class User < ActiveRecord::Base
       if key == :section_name
         if val
           # check if the section already exist
-          section = Section.find_or_create_by_name(val)
+          section = Section.find_or_create_by(name: val)
           user_attributes['section_id'] = section.id
         end
       else
@@ -199,24 +265,12 @@ class User < ActiveRecord::Base
     end
 
     # Is there already a Student with this User number?
-    current_user = user_class.find_or_create_by_user_name(user_attributes[:user_name])
+    current_user = user_class.find_or_create_by(
+      user_name: user_attributes[:user_name])
     current_user.attributes = user_attributes
 
-    unless current_user.save
-      return nil
-    end
-
+    return unless current_user.save
     current_user
-  end
-
-  # Convenience method which returns a configuration Hash for the
-  # repository lib
-  def self.repo_config
-    # create config
-    conf = Hash.new
-    conf['IS_REPOSITORY_ADMIN'] = MarkusConfigurator.markus_config_repository_admin?
-    conf['REPOSITORY_PERMISSION_FILE'] = MarkusConfigurator.markus_config_repository_permission_file
-    return conf
   end
 
   # Set API key for user model. The key is a
@@ -256,7 +310,7 @@ class User < ActiveRecord::Base
   # Create some random, hard to guess SHA2 512 bit long
   # digest.
   def generate_api_key
-    digest = Digest::SHA2.new(bitlen=512)
+    digest = Digest::SHA2.new(512)
     # generate a unique token
     unique_seed = SecureRandom.hex(20)
     digest.update("#{unique_seed} SECRET! #{Time.zone.now.to_f}").to_s
@@ -273,41 +327,16 @@ class User < ActiveRecord::Base
     if self.first_name
       self.first_name = self.first_name.strip
     end
-  end
-
-  # Adds read and write permissions for each newly created Admin or Ta user
-  def grant_repository_permissions
-    # If we're not the repository admin, bail out
-    return if(self.student? or !MarkusConfigurator.markus_config_repository_admin?)
-
-    conf = User.repo_config
-    repo = Repository.get_class(MarkusConfigurator.markus_config_repository_type,
-                                conf)
-    repo_names = Group.all.collect do |group|
-                   File.join(MarkusConfigurator.markus_config_repository_storage,
-                             group.repository_name)
-                 end
-    repo.set_bulk_permissions(repo_names, {self.user_name => Repository::Permission::READ_WRITE})
-  end
-
-  # Revokes read and write permissions for a deleted admin user
-  def revoke_repository_permissions
-    return if(self.student? or !MarkusConfigurator.markus_config_repository_admin?)
-
-    conf = User.repo_config
-    repo = Repository.get_class(MarkusConfigurator.markus_config_repository_type, conf)
-    repo_names = Group.all.collect do |group| File.join(MarkusConfigurator.markus_config_repository_storage, group.repository_name) end
-    repo.delete_bulk_permissions(repo_names, [self.user_name])
-  end
-
-  def maintain_repository_permissions
-    return if(self.student? or !MarkusConfigurator.markus_config_repository_admin?)
-    if self.user_name_changed?
-      conf = User.repo_config
-      repo = Repository.get_class(MarkusConfigurator.markus_config_repository_type, conf)
-      repo_names = Group.all.collect do |group| File.join(MarkusConfigurator.markus_config_repository_storage, group.repository_name) end
-      repo.delete_bulk_permissions(repo_names, [self.user_name_was])
-      repo.set_bulk_permissions(repo_names, {self.user_name => Repository::Permission::READ_WRITE})
+    if self.email
+      self.email = self.email.strip
     end
+    if self.id_number
+      self.id_number = self.id_number.strip
+    end
+  end
+
+  def nillify_empty_email_and_id_number
+    self.email = nil if self.email.blank?
+    self.id_number = nil if self.id_number.blank?
   end
 end

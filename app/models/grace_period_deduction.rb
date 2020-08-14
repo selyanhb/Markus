@@ -1,3 +1,3 @@
-class GracePeriodDeduction < ActiveRecord::Base
-  belongs_to :membership
+class GracePeriodDeduction < ApplicationRecord
+  belongs_to :membership, optional: true
 end

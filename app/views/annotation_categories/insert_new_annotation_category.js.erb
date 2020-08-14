@@ -1,2 +1,8 @@
-jQuery('#add_annotation_category').replaceWith("<%= escape_javascript(render :partial => 'annotation_category', :locals => { :annotation_category => @annotation_category }).html_safe %>");
-jQuery('#annotation_list_holder').replaceWith("<%= escape_javascript(render :partial => 'annotation_list', :locals => { :annotation_category => @annotation_category }).html_safe %>");
+$('#add_annotation_category').remove();
+$('#annotation_category_pane_list').append(
+  "<%= escape_javascript(render partial: 'annotation_category',
+                                locals: { annotation_category: @annotation_category }).html_safe %>");
+$('#annotation_list_holder').replaceWith(
+  "<%= escape_javascript(render partial: 'annotation_list',
+                                locals: { annotation_category: @annotation_category,
+                                          annotation_texts: [] }).html_safe %>");

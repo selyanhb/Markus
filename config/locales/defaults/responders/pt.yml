@@ -1,0 +1,37 @@
+pt:
+  flash:
+    actions:
+      create:
+        success: "%{resource_name} criado com sucesso."
+        error: "Falha ao criar %{resource_name}."
+      update:
+        success: "%{resource_name} atualizado com sucesso."
+        error: "Falha ao atualizar %{resource_name}."
+      update_files:
+        success: "As alterações foram feitas."
+      destroy:
+        success: "%{resource_name} suprimido com sucesso."
+        error: "Falha ao atualizar suprimido %{resource_name}."
+    annotation_categories:
+      create:
+        error: "%{resource_name} UPDATE ME: %{errors}."
+      update:
+        error: "%{resource_name} UPDATE ME: %{errors}."
+    criteria:
+      destroy:
+        success: "Criterion suprimido com sucesso."
+    students:
+      create:
+        error: "%{resource_name} UPDATE ME: %{errors}."
+      update:
+        error: "%{resource_name} UPDATE ME: %{errors}."
+    admins:
+      create:
+        error: "%{resource_name} UPDATE ME: %{errors}."
+      update:
+        error: "%{resource_name} UPDATE ME: %{errors}."
+    tas:
+      create:
+        error: "%{resource_name} UPDATE ME: %{errors}."
+      update:
+        error: "%{resource_name} UPDATE ME: %{errors}."

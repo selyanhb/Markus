@@ -1,15 +1,10 @@
-class TestResult < ActiveRecord::Base
-  belongs_to :submission
-  validates_presence_of :submission # we require an associated submission
-  validates_associated :submission # submission need to be valid
+class TestResult < ApplicationRecord
+  belongs_to :test_group_result
 
-  #=== Description
-  # Updates the file_content attribute of an TestResult object
-  #=== Returns
-  # True if saving with the new content succeeds, false otherwise
-  def update_file_content(new_content)
-    return false if new_content.nil?
-    self.file_content = new_content
-    self.save
-  end
+  validates :name, presence: true
+  validates :status, presence: true, inclusion: { in: %w[pass partial fail error] }
+  validates :marks_earned, :marks_total, presence: true, numericality: { greater_than_or_equal_to: 0 }
+  validates :time, numericality: { greater_than_or_equal_to: 0, only_integer: true, allow_nil: true }
+  # output could be empty in some situations
+  validates :output, presence: true, if: ->(o) { o.output.nil? }
 end

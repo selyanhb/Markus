@@ -1,0 +1,5 @@
+en:
+  extensions:
+    apply_penalty: "Apply late submission policy when collecting this group's submissions"
+    create_extension: "Extension added"
+    delete_extension: "Extension removed"

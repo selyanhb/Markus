@@ -5,69 +5,79 @@
    # #{date} - The date the exam/test/lab corresponding to this grade entry form took place
    # #{grade_entry_item(s)} - Column name and total
 %>
-<%
-  # For the internationalization of the Calendar
-%>
-<% if I18n.default_locale == :en %>
-   <%= calendar_date_select_includes "silver" %>
-<% else %>
-   <%= calendar_date_select_includes "silver", :locale => I18n.default_locale %>
+
+<% content_for :head do %>
+  <%= stylesheet_link_tag 'jquery-ui' %>
+
+  <%= render partial: 'boot',
+             formats: [:js],
+             handlers: [:erb] %>
 <% end %>
 
-<div class="wrapLeft">
-<%= render 'shared/flash_message' %>
+<p><%= t('grade_entry_forms.required_fields_html') %></p>
+<%= form_for @grade_entry_form, as: :grade_entry_form do |f| %>
 
-<%= form_for @grade_entry_form, :as => :grade_entry_form do |f| %>
-  <%= render :partial => "shared/error_explanation", :locals => { :model => @grade_entry_form } %>
-<fieldset>
-  <legend><%= t('grade_entry_forms.properties') %></legend>
+  <%= render partial: 'shared/error_explanation',
+             locals: { model: @grade_entry_form } %>
 
-    <% # Basic grade entry form properties
-    %>
+  <fieldset class='no-legend'>
+    <div class='inline-labels'>
+      <%= f.label :short_identifier, Assignment.human_attribute_name(:short_identifier),
+                  class: 'required' %>
+      <%= f.text_field :short_identifier %>
 
-    <%= raw(f.label :short_identifier, t(:short_identifier).html_safe) %>
-    <%= raw(f.text_field :short_identifier) %><br />
+      <%= f.label :description, GradeEntryForm.human_attribute_name(:description),
+                  class: 'required' %>
+      <%= f.text_field :description %>
 
-    <%= raw(f.label :description, t(:description)) %>
-    <%= raw(f.text_field :description) %><br />
+      <%= f.label :message %>
+      <%= f.text_area :message,
+                      rows: 8,
+                      cols: 65,
+                      placeholder:
+                        t('grade_entry_forms.message_placeholder') %>
 
+      <%= f.label :due_date, GradeEntryForm.human_attribute_name(:date) %>
+      <%= f.text_field :due_date,
+                       class: 'datepicker',
+                       size: 30,
+                       placeholder: t('date.format_string.placeholder') %>
 
-    <%= raw(f.label :message) %>
-    <%= raw(f.text_area :message, :rows => 8, :cols => 65) %><br />
+      <%= f.label :show_total, GradeEntryForm.human_attribute_name(:show_total) %>
+      <%= f.check_box :show_total %>
 
-    <%= raw(f.label :date, t(:shortened_date).html_safe) %>
-    <%= raw(f.calendar_date_select :date,
-                            {:year_range => 0.years.ago..1.years.from_now,
-	                           :locale => I18n.default_locale}) %>
-    <%= raw(t(:iso_date_format_example)) %>
-
-<br />
-
-    <%= raw(f.label :show_total, t('grade_entry_forms.show_total')) %>
-    <%= raw(f.check_box :show_total) %><br />
-    <br />
-
-    <h4><%= t('grade_entry_forms.specify_columns') %></h4>
-
-    <% # Display the column names and totals
-    %>
-    <div id="grade_entry_items">
-      <%= f.fields_for :grade_entry_items do |entry_item| %>
-        <%= render :partial => 'grade_entry_item',
-            		   :locals => {:grade_entry_item => entry_item.object,
-                               :form => f} %>
-      <% end %>
+      <%= f.label :is_hidden, GradeEntryForm.human_attribute_name(:is_hidden) %>
+      <%= f.check_box :is_hidden %>
     </div>
+  </fieldset>
 
-   <% # Allow the user to add a new column to the form
-    %>
-    <p id="grade_entry_item_add_link">
-      <%= add_grade_entry_item_link t('grade_entry_forms.add_column'), f %>
-    </p>
+  <div id='grade_entry_items'>
+    <div style="float: right">
+      <%= link_to t('grade_entry_forms.add_column'),
+                  '#',
+                  onclick: 'add_column(); return false;',
+                  class: 'button add-new-button' %>
+    </div>
+    <h2><%= GradeEntryItem.model_name.human.pluralize %></h2>
+    <%# Ensures there is at least one column whenever the form is loaded. %>
+    <% if @grade_entry_form.grade_entry_items.empty? %>
+      <%= f.fields_for :grade_entry_items, GradeEntryItem.new do |entry_item| %>
+        <%= render partial: 'grade_entry_item',
+                   locals: { grade_entry_item: entry_item.object,
+                             form: entry_item } %>
+      <% end %>
+    <% else %>
+      <%= f.fields_for :grade_entry_items do |entry_item| %>
+        <%= render partial: 'grade_entry_item',
+                   locals: { grade_entry_item: entry_item.object,
+                             form: entry_item } %>
+      <% end %>
+    <% end %>
+  </div>
 
-</fieldset>
-
-<%= f.submit  :disable_with => I18n.t('working') %>
+  <p>
+    <%= f.submit (f.object.new_record? ? t('helpers.submit.create', model: GradeEntryForm.model_name.human) :
+                                         t('helpers.submit.update', model: GradeEntryForm.model_name.human)),
+                 data: { disable_with: t('working') } %>
+  </p>
 <% end %>
-
-</div>

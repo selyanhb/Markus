@@ -1,0 +1,4 @@
+$('#annotation_text_' + <%= @text['id'] %>).replaceWith(
+  "<%= escape_javascript(render partial: 'annotation_text',
+                                locals: { annotation_text: @text }).html_safe %>");
+reloadDOM();

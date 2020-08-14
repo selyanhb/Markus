@@ -1,104 +1,85 @@
-document.observe('dom:loaded', function() {
+$(document).ready(function() {
+  // Handle indenting in the new annotation textarea (2 spaces)
+  $('#new_annotation_content').keydown(function(e) {
+    var keyCode = e.keyCode || e.which;
 
-  // changing the marking status
-  new Form.Element.EventObserver('marking_state', function(element, value) {
+    if (keyCode == 9) {
+      e.preventDefault();
+      var start = this.selectionStart;
+      var end   = this.selectionEnd;
 
-    var url = element.readAttribute('data-action');
+      // Add the 2 spaces
+      this.value = this.value.substring(0, start)
+                   + '  '
+                   + this.value.substring(end);
 
-    var params = {
-      'value': value || '',
-      'authenticity_token': AUTH_TOKEN
+      // Put caret in correct position
+      this.selectionStart = this.selectionEnd = start + 2;
     }
-
-    new Ajax.Request(url, {
-      asynchronous: true,
-      evalScripts: true,
-      parameters: params
-    });
-  });
-
-  // releasing the grades, only available on the admin page
-  var release = $('released')
-  if (release)
-  {
-    new Form.Element.EventObserver(release, function(element, value) {
-
-      var url = element.readAttribute('data-action');
-
-      var params = {
-        'value': value || '',
-        'authenticity_token': AUTH_TOKEN
-      }
-
-      new Ajax.Request(url, {
-        asynchronous: true,
-        evalScripts: true,
-        parameters: params,
-        onSuccess: function(request) { window.onbeforeunload = null; }
-      });
-    });
-  }
-
-  /**
-   * event handlers for the flexible criteria grades
-   */
-  $$('.mark_grade_input').each(function(item) {
-
-    // prevent clicks from hiding the grade
-    item.observe('click', function(event){
-      event.stop();
-    });
-
-    new Form.Element.EventObserver(item, function(element, value) {
-
-      var url = element.readAttribute('data-action');
-
-      var params = {
-        'mark': value || '',
-        'authenticity_token': AUTH_TOKEN
-      }
-
-      new Ajax.Request(url, {
-        asynchronous: true,
-        evalScripts: true,
-        parameters: params
-      });
-    });
   });
 });
 
-function focus_mark_criterion(id) {
-  if($('mark_criterion_title_' + id + '_expand').hasClassName('expanded')) {
-    hide_criterion(id);
-  } else {
-    show_criterion(id);
+// designate $next_criteria as the currently selected criteria
+function activeCriterion($next_criteria) {
+  if (!$next_criteria.hasClass('active-criterion')) {
+    $criteria_list = $('.marks-list > li');
+    // remove all previous active-criterion (there should only be one)
+    $criteria_list.removeClass('active-criterion');
+    // scroll the $next_criteria to the top of the criterion bar
+    $('#mark_viewer').animate({
+      scrollTop: $next_criteria.offset().top - $criteria_list.first().offset().top
+    }, 100);
+    $next_criteria.addClass('active-criterion');
+    // Unfocus any exisiting textfields/radio buttons
+    $('.flexible_criterion input, .checkbox_criterion input').blur();
+    // Remove any active rubrics
+    $('.active-rubric').removeClass('active-rubric');
+    if ($next_criteria.hasClass('flexible_criterion')) {
+      var $input = $next_criteria.find('input[type="text"]');
+      // This step is necessary for focusing the cursor at the end of input
+      $input.focus().val($input.val());
+    } else if ($next_criteria.hasClass('rubric_criterion')) {
+      $selected = $next_criteria.find('.rubric-level.selected');
+      if ($selected.length) {
+        $selected.addClass('active-rubric');
+      } else {
+        $next_criteria.find('tr>td')[0].addClass('active-rubric');
+      }
+    } else if ($next_criteria.hasClass('checkbox_criterion')) {
+      $selected_option = $next_criteria.find('input[checked]')[0];
+      if ($selected_option) {
+        $selected_option.focus();
+      } else {
+        $next_criteria.find('input')[0].focus();
+      }
+    }
+    // If this current criteria is not expanded, expand it
+    if (!$next_criteria.hasClass('expanded')) {
+      if ($next_criteria.hasClass('rubric_criterion')) {
+        $next_criteria.children('.criterion_title').click();
+      } else {
+        $next_criteria.find('.criterion_expand').click();
+      }
+    }
   }
 }
 
-function hide_criterion(id) {
-    $('mark_criterion_inputs_' + id).hide();
-    $('mark_criterion_title_' + id).show();
-    $('mark_criterion_title_' + id + "_expand").innerHTML = "+ &nbsp;"
-    $('mark_criterion_title_' + id + "_expand").removeClassName('expanded');
-}
-
-function show_criterion(id) {
-    $('mark_criterion_title_'+id+"_expand").innerHTML = "- &nbsp;"
-    $('mark_criterion_inputs_' + id).show();
-    $('mark_criterion_title_' + id + "_expand").addClassName('expanded');
-}
-
-function select_mark(mark_id, mark) {
-  original_mark = $$('#mark_' + mark_id + '_table .rubric_criterion_level_selected').first()
-  if (typeof(original_mark) != "undefined") {
-    original_mark.removeClassName('rubric_criterion_level_selected');
+// Set the active-criterion to the next sibling
+function nextCriterion() {
+  $next_criterion = $('.active-criterion').next('li:not(.unassigned)');
+  // If no next criterion exists, loop back to the first one
+  if (!$next_criterion.length) {
+    $next_criterion = $('.marks-list > li:not(.unassigned)').first();
   }
-  if (mark != null){
-	$('mark_' + mark_id + '_' + mark).addClassName('rubric_criterion_level_selected');
-  }
+  activeCriterion($next_criterion);
 }
 
-function update_total_mark(total_mark) {
-  $('current_mark_div').update(total_mark);
-  $('current_total_mark_div').update(total_mark);
+// Set the active-criterion to the previous sibling
+function prevCriterion() {
+  $prev_criterion = $('.active-criterion').prev('li:not(.unassigned)');
+  // If no previous criterion exists, loop back to the last one
+  if (!$prev_criterion.length) {
+    $prev_criterion = $('.marks-list > li:not(.unassigned)').last();
+  }
+  activeCriterion($prev_criterion);
 }

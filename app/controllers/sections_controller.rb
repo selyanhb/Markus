@@ -1,13 +1,14 @@
 class SectionsController < ApplicationController
+  before_action :authorize_only_for_admin
 
-  before_filter :authorize_only_for_admin
+  layout 'assignment_content'
 
   # Controller corresponding to the users management part
 
   # Displays sections, and allows to create them
   #TODO Displays metrics concerning users and sections
   def index
-    @sections = Section.all
+    @sections = Section.all.includes(:students)
   end
 
   def new
@@ -16,19 +17,17 @@ class SectionsController < ApplicationController
 
   # Creates a new section
   def create
-    @user = Student.new(params[:user])
-
-    @section = Section.new(params[:section])
+    @section = Section.new(section_params)
     if @section.save
       @sections = Section.all
-      flash[:success] = I18n.t('section.create.success', :name => @section.name)
+      flash_message(:success, t('.success', name: @section.name))
       if params[:section_modal]
         render 'close_modal_add_section'
         return
       end
-      redirect_to :action => 'index'
+      redirect_to action: 'index'
     else
-      flash[:error] = I18n.t('section.create.error')
+      flash_message(:error, t('.error'))
       if params[:section_modal]
         render 'add_new_section_handler'
         return
@@ -45,11 +44,11 @@ class SectionsController < ApplicationController
 
   def update
     @section = Section.find(params[:id])
-    if @section.update_attributes(params[:section])
-      flash[:success] = I18n.t('section.update.success', :name => @section.name)
-      redirect_to :action => 'index'
+    if @section.update(section_params)
+      flash_message(:success, t('.success', name: @section.name))
+      redirect_to action: 'index'
     else
-      flash[:error] = I18n.t('section.update.error')
+      flash_message(:error, t('.error'))
       render :edit
     end
   end
@@ -57,17 +56,19 @@ class SectionsController < ApplicationController
   def destroy
     @section = Section.find(params[:id])
 
-    # only destroy section if this user is allowed to do so and the section has no students
-    if @section.user_can_modify?(current_user)
-      if @section.has_students?
-        flash[:error] = I18n.t('section.delete.not_empty')
-      else
-        @section.destroy
-        flash[:success] = I18n.t('section.delete.success')
-      end
+    if @section.has_students?
+      flash_message(:error, t('.not_empty'))
     else
-      flash[:error] = I18n.t('section.delete.error_permissions')
+      @section.section_due_dates.each(&:destroy)
+      @section.destroy
+      flash_message(:success, t('.success'))
     end
-    redirect_to :action => :index
+    redirect_to action: :index
+  end
+
+  private
+
+  def section_params
+    params.require(:section).permit(:name)
   end
 end

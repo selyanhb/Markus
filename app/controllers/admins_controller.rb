@@ -1,16 +1,18 @@
 class AdminsController < ApplicationController
-  include UsersHelper
-  before_filter  :authorize_only_for_admin
-
-  def index
+  before_action do |_|
+    authorize! with: UserPolicy
   end
 
-  def populate
-    admins_data = Admin.all(:order => 'user_name')
-    # construct_table_rows defined in UsersHelper
-    @admins = construct_table_rows(admins_data)
+  layout 'assignment_content'
+
+  responders :flash, :collection
+
+  def index
     respond_to do |format|
-      format.json { render :json => @admins }
+      format.html
+      format.json {
+        render json: Admin.select(:id, :user_name, :first_name, :last_name, :email)
+      }
     end
   end
 
@@ -19,40 +21,28 @@ class AdminsController < ApplicationController
   end
 
   def new
-    @user = Admin.new(params[:user])
+    @user = Admin.new
   end
 
   def update
     @user = Admin.find(params[:id])
-    attrs = params[:user]
-    # update_attributes supplied by ActiveRecords
-    if @user.update_attributes(attrs).nil?
-      flash[:error] = I18n.t('admins.update.error')
-      render :edit
-    else
-      flash[:success] = I18n.t('admins.update.success',
-        :user_name => @user.user_name)
-      redirect_to :action => 'index'
-    end
+    @user.update(user_params)
+    respond_with(@user)
   end
 
-  # Create a new Admin
   def create
-    # Default attributes: role = TA or role = STUDENT
-    # params[:user] is a hash of values passed to the controller
-    # by the HTML form with the help of ActiveView::Helper::
-    @user = Admin.new(params[:user])
-    # Return unless the save is successful; save inherted from
-    # active records--creates a new record if the model is new, otherwise
-    # updates the existing record
-    if @user.save
-      flash[:success] = I18n.t('admins.create.success',
-        :user_name => @user.user_name)
+    @user = Admin.create(user_params)
+    respond_with(@user)
+  end
 
-      redirect_to :action => 'index'
-    else
-      flash[:error] = I18n.t('admins.create.error')
-      render 'new'
-    end
+  private
+
+  def user_params
+    params.require(:user).permit(:user_name, :first_name, :last_name, :email)
+  end
+
+  def flash_interpolation_options
+    { resource_name: @user.user_name.blank? ? @user.model_name.human : @user.user_name,
+      errors: @user.errors.full_messages.join('; ')}
   end
 end

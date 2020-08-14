@@ -1,0 +1,37 @@
+en:
+  action_policy:
+    policy:
+      assignment:
+        autogenerate_group_name?: "This assignment does automatically generate group names."
+        before_due_date?: "You cannot run tests because the due date for this assignment has passed."
+        collection_date_passed?: "Could not create group: the due date for this assignment has passed."
+        enabled?: "You cannot run tests because they are not enabled for this assignment."
+        not_a_ta?: "You cannot run tests because graders are not allowed to."
+        not_yet_in_group?: "You already have a group, and cannot create another."
+        students_form_groups?: "This assignment does not allow students to form their own groups."
+        test_groups_exist?: "You cannot run tests because the test framework is not configured."
+        tokens_released?: "You cannot run tests because tokens are not available yet."
+        work_alone?: "You cannot work alone for this assignment. The minimum group size is %{group_min}."
+      grouping:
+        before_due_date?: "The due date for this assignment has passed."
+        deletable_by?: "You are not allowed to delete the group."
+        delete_rejected?: "Only the inviter can delete a declined invitation."
+        disinvite_member?: "Only the inviter can cancel a pending invitation."
+        member?: "You cannot run tests because you do not have a group yet, or your group is not valid."
+        no_extension?: "This group has an extension. You cannot update the group membership."
+        no_submission?: "You already submitted something. You cannot delete your group."
+        not_in_progress?: "You cannot run tests because you or your group have a test already enqueued for execution, please wait for the results."
+        tokens_available?: "You cannot run tests because you or your group do not have tokens available."
+      submission:
+        before_release?: "You cannot run tests because the marks have been released."
+        get_feedback_file?: "No access to feedback file."
+        not_a_student?: "You cannot run tests because students are not allowed to."
+        manage_subdirectories?: "You are not allowed to create, delete or change subdirectories."
+      group:
+        student_manage?: "You are not allowed to create or manage groups"
+        manage?: "You are not allowed to manage groups"
+      note:
+        manage?: "You cannot add or modify the notes because students are not allowed to."
+        modify?: "You do not have permissions to edit or delete the notes which is created by others."
+      starter_file_group:
+        manage?: "You are not allowed to manage starter file groups"

@@ -1,378 +1,143 @@
-# Helper methods for Testing Framework forms
 module AutomatedTestsHelper
-
-  def add_test_file_link(name, form)
-    link_to_function name do |page|
-      test_file = render(:partial => 'test_file',
-                         :locals => {:form => form,
-                                     :test_file => TestFile.new,
-                                     :file_type => 'test'})
-      page << %{
-        if ($F('is_testing_framework_enabled') != null) {
-          var new_test_file_id = new Date().getTime();
-          $('test_files').insert({bottom: "#{ escape_javascript test_file }".replace(/(attributes_\\d+|\\[\\d+\\])/g, new_test_file_id) });
-          $('assignment_test_files_' + new_test_file_id + '_filename').focus();
-        } else {
-          alert("#{I18n.t('automated_tests.add_test_file_alert')}");
+  def extra_test_group_schema(assignment)
+    criterion_names, criterion_ids = assignment.ta_criteria.map do |c|
+      [c.name, c.id]
+    end.transpose
+    { type: :object,
+      properties: {
+        name: {
+          type: :string,
+          title: "#{TestGroup.model_name.human} #{TestGroup.human_attribute_name(:name).downcase}",
+          default: TestGroup.model_name.human
+        },
+        display_output: {
+          type: :string,
+          enum: TestGroup.display_outputs.keys,
+          enumNames: TestGroup.display_outputs.keys.map { |k| I18n.t("automated_tests.display_output.#{k}") },
+          default: TestGroup.display_outputs.keys.first,
+          title: I18n.t('automated_tests.display_output_title')
+        },
+        criterion: {
+          type: :string,
+          enum: criterion_ids || [],
+          enumNames: criterion_names || [],
+          title: Criterion.model_name.human
         }
-      }
-    end
+      },
+      required: %w[display_output] }
   end
 
-  def add_lib_file_link(name, form)
-    link_to_function name do |page|
-      test_file = render(:partial => 'test_file',
-                         :locals => {:form => form,
-                                     :test_file => TestFile.new,
-                                     :file_type => 'lib'})
-      page << %{
-        if ($F('is_testing_framework_enabled') != null) {
-          var new_test_file_id = new Date().getTime();
-          $('lib_files').insert({bottom: "#{ escape_javascript test_file }".replace(/(attributes_\\d+|\\[\\d+\\])/g, new_test_file_id) });
-          $('assignment_test_files_' + new_test_file_id + '_filename').focus();
-        } else {
-          alert("#{I18n.t('automated_tests.add_lib_file_alert')}");
-        }
-      }
-    end
+  def fill_in_schema_data!(schema_data, files, assignment)
+    schema_data['definitions']['files_list']['enum'] = files
+    schema_data['definitions']['test_data_categories']['enum'] = TestRun.all_test_categories
+    schema_data['definitions']['extra_group_data'] = extra_test_group_schema(assignment)
+    schema_data
   end
 
-  def add_parser_file_link(name, form)
-    link_to_function name do |page|
-      test_file = render(:partial => 'test_file',
-                         :locals => {:form => form,
-                                     :test_file => TestFile.new,
-                                     :file_type => 'parse'})
-      page << %{
-        if ($F('is_testing_framework_enabled') != null) {
-          var new_test_file_id = new Date().getTime();
-          $('parser_files').insert({bottom: "#{ escape_javascript test_file }".replace(/(attributes_\\d+|\\[\\d+\\])/g, new_test_file_id) });
-          $('assignment_test_files_' + new_test_file_id + '_filename').focus();
-        } else {
-          alert("#{I18n.t('automated_tests.add_parser_file_alert')}");
-        }
-      }
-    end
-  end
+  def update_test_groups_from_specs(assignment, test_specs)
+    test_specs_path = assignment.autotest_settings_file
+    # create/modify test groups based on the autotest specs
+    test_group_ids = []
+    test_specs['testers'].each do |tester_specs|
+      next if tester_specs['test_data'].nil?
 
-  def create_ant_test_files(assignment)
-    # Create required ant test files - build.xml and build.properties
-    if assignment && assignment.test_files.empty?
-      @ant_build_file = TestFile.new
-      @ant_build_file.assignment = assignment
-      @ant_build_file.filetype = 'build.xml'
-      @ant_build_file.filename = 'tempbuild.xml'        # temporary placeholder for now
-      @ant_build_file.save(:validate => false)
-
-      @ant_build_prop = TestFile.new
-      @ant_build_prop.assignment = assignment
-      @ant_build_prop.filetype = 'build.properties'
-      @ant_build_prop.filename = 'tempbuild.properties' # temporary placeholder for now
-      @ant_build_prop.save(:validate => false)
-
-      # Setup Testing Framework repository
-      test_dir = File.join(
-                  MarkusConfigurator.markus_config_automated_tests_repository,
-                  assignment.short_identifier)
-      FileUtils.makedirs(test_dir)
-
-      assignment.reload
-    end
-  end
-
-  # Process Testing Framework form
-  # - Process new and updated test files (additional validation to be done at the model level)
-  def process_test_form(assignment, params)
-
-    # Hash for storing new and updated test files
-    updated_files = {}
-
-    # Retrieve all test file entries
-    testfiles = params[:assignment][:test_files_attributes]
-
-    # First check for duplicate filenames:
-    filename_array = []
-    testfiles.values.each do |tfile|
-      if tfile['filename'].respond_to?(:original_filename)
-        fname = tfile['filename'].original_filename
-        # If this is a duplicate filename, raise error and return
-        if filename_array.include?(fname)
-          raise I18n.t('automated_tests.duplicate_filename') + fname
+      tester_specs['test_data'].each do |test_group_specs|
+        test_group_specs['extra_info'] ||= {}
+        extra_data_specs = test_group_specs['extra_info']
+        test_group_id = extra_data_specs['test_group_id']
+        display_output = extra_data_specs['display_output'] || TestGroup.display_outputs.keys.first
+        test_group_name = extra_data_specs['name'] || TestGroup.model_name.human
+        criterion_id = nil
+        unless extra_data_specs['criterion'].nil?
+          criterion_id = extra_data_specs['criterion']
+        end
+        fields = { assignment: assignment, name: test_group_name, display_output: display_output,
+                   criterion_id: criterion_id }
+        if test_group_id.nil?
+          test_group = TestGroup.create!(fields)
+          test_group_id = test_group.id
+          extra_data_specs['test_group_id'] = test_group_id # update specs to contain new id
         else
-          filename_array << fname
+          test_group = TestGroup.find(test_group_id)
+          test_group.update!(fields)
         end
+        test_group_ids << test_group_id
       end
     end
-
-    # Filter out files that need to be created and updated:
-    testfiles.each_key do |key|
-
-      tfile = testfiles[key]
-
-      # Check to see if this is an update or a new file:
-      # - If 'id' exists, this is an update
-      # - If 'id' does not exist, this is a new test file
-      tf_id = tfile['id']
-
-      # If only the 'id' exists in the hash, other attributes were not updated so we skip this entry.
-      # Otherwise, this test file possibly requires an update
-      if tf_id != nil && tfile.size > 1
-
-        # Find existing test file to update
-        @existing_testfile = TestFile.find_by_id(tf_id)
-        if @existing_testfile
-          # Store test file for any possible updating
-          updated_files[key] = tfile
-        end
-      end
-
-      # Test file needs to be created since record doesn't exist yet
-      if tf_id.nil? && tfile['filename']
-        updated_files[key] = tfile
-      end
+    # delete test groups that are not in the autotest specs
+    deleted_test_groups = TestGroup.where(assignment: assignment)
+    unless test_group_ids.empty?
+      deleted_test_groups = deleted_test_groups.where.not(id: test_group_ids)
     end
-
-    # Update test file attributes
-    assignment.test_files_attributes = updated_files
-
-    # Update assignment enable_test and tokens_per_day attributes
-    assignment.enable_test = params[:assignment][:enable_test]
-    num_tokens = params[:assignment][:tokens_per_day]
-    if num_tokens
-      assignment.tokens_per_day = num_tokens
-    end
-
-    assignment
+    deleted_test_groups.delete_all
+  ensure
+    # save modified specs
+    File.open(test_specs_path, 'w') { |f| f.write test_specs.to_json }
   end
 
-  # Verify tests can be executed
-  def can_run_test?
-    if @current_user.admin?
-      true
-    elsif @current_user.ta?
-      true
-    elsif @current_user.student?
-      # Make sure student belongs to this group
-      unless @current_user.accepted_groupings.include?(@grouping)
-        return false
-      end
-      t = @grouping.token
-      if t == nil
-        raise I18n.t('automated_tests.missing_tokens')
-      end
-      if t.tokens > 0
-        t.decrease_tokens
-        true
-      else
-        false
-      end
+  def server_params(markus_address, assignment_id)
+    { client_type: :markus,
+      client_data: { url: markus_address,
+                     assignment_id: assignment_id,
+                     api_key: server_api_key } }
+  end
+
+  def test_data(test_run_ids)
+    TestRun.joins(:grouping, :user)
+           .where(id: test_run_ids)
+           .pluck_to_hash('groupings.group_id as group_id',
+                          'test_runs.id as run_id',
+                          'users.type as user_type')
+           .each { |h| h[:test_categories] = [h['user_type'].downcase] }
+  end
+
+  def get_markus_address(host_with_port)
+    if Rails.application.config.action_controller.relative_url_root.nil?
+      host_with_port
+    else
+      host_with_port + Rails.application.config.action_controller.relative_url_root
     end
   end
 
-  # Export group repository for testing
-  def export_repository(group, repo_dest_dir)
-    # Create the test framework repository
-    unless File.exists?(MarkusConfigurator.markus_config_automated_tests_repository)
-      FileUtils.mkdir(MarkusConfigurator.markus_config_automated_tests_repository)
-    end
-
-    # Delete student's assignment repository if it already exists
-    repo_dir = File.join(MarkusConfigurator.markus_config_automated_tests_repository, group.repo_name)
-    if File.exists?(repo_dir)
-      FileUtils.rm_rf(repo_dir)
-    end
-
-    return group.repo.export(repo_dest_dir)
-    rescue Exception => e
-      return "#{e.message}"
-  end
-
-  # Export configuration files for testing
-  def export_configuration_files(assignment, group, repo_dest_dir)
-    assignment_dir = File.join(MarkusConfigurator.markus_config_automated_tests_repository, assignment.short_identifier)
-    repo_assignment_dir = File.join(repo_dest_dir, assignment.short_identifier)
-
-    # Store the Api key of the grader or the admin in the api.txt file in the exported repository
-    FileUtils.touch(File.join(assignment_dir, 'api.txt'))
-    api_key_file = File.open(File.join(repo_assignment_dir, 'api.txt'), 'w')
-    api_key_file.write(current_user.api_key)
-    api_key_file.close
-
-    # Create a file "export.properties" where group_name and assignment name are stored for Ant
-    FileUtils.touch(File.join(assignment_dir, 'export.properties'))
-    api_key_file = File.open(File.join(repo_assignment_dir, 'export.properties'), 'w')
-    api_key_file.write('group_name = ' + group.group_name + "\n")
-    api_key_file.write('assignment = ' + assignment.short_identifier + "\n")
-    api_key_file.close
-  end
-
-  # Delete test repository directory
-  def delete_test_repo(group, repo_dest_dir)
-    repo_dir = File.join(MarkusConfigurator.markus_config_automated_tests_repository, group.repo_name)
-    # Delete student's assignment repository if it exists
-    if File.exists?(repo_dir)
-      FileUtils.rm_rf(repo_dir)
-    end
-  end
-
-  # Copy files needed for testing
-  def copy_ant_files(assignment, repo_dest_dir)
-    # Check if the repository where you want to copy Ant files to exists
-    unless File.exists?(repo_dest_dir)
-      raise I18n.t('automated_tests.dir_not_exist', {:dir => repo_dest_dir})
-    end
-
-    # Create the src repository to put student's files
-    assignment_dir = File.join(MarkusConfigurator.markus_config_automated_tests_repository, assignment.short_identifier)
-    repo_assignment_dir = File.join(repo_dest_dir, assignment.short_identifier)
-    FileUtils.mkdir(File.join(repo_assignment_dir, 'src'))
-
-    # Move student's source files to the src repository
-    pwd = FileUtils.pwd
-    FileUtils.cd(repo_assignment_dir)
-    FileUtils.mv(Dir.glob('*'), File.join(repo_assignment_dir, 'src'), :force => true )
-
-    # You always have to come back to your former working directory if you want to avoid errors
-    FileUtils.cd(pwd)
-
-    # Copy the build.xml, build.properties Ant Files and api_helpers (only one is needed)
-    if File.exists?(assignment_dir)
-      FileUtils.cp(File.join(assignment_dir, 'build.xml'), repo_assignment_dir)
-      FileUtils.cp(File.join(assignment_dir, 'build.properties'), repo_assignment_dir)
-      FileUtils.cp('lib/tools/api_helper.rb', repo_assignment_dir)
-      FileUtils.cp('lib/tools/api_helper.py', repo_assignment_dir)
-
-      # Copy the test folder:
-      # If the current user is a student, do not copy tests that are marked 'is_private' over
-      # Otherwise, copy all tests over
-      if @current_user.student?
-        # Create the test folder
-        assignment_test_dir = File.join(assignment_dir, 'test')
-        repo_assignment_test_dir = File.join(repo_assignment_dir, 'test')
-        FileUtils.mkdir(repo_assignment_test_dir)
-        # Copy all non-private tests over
-        assignment.test_files.find_all_by_filetype_and_is_private('test', 'false').each do |file|
-          FileUtils.cp(File.join(assignment_test_dir, file.filename), repo_assignment_test_dir)
-        end
-      else
-        if File.exists?(File.join(assignment_dir, 'test'))
-          FileUtils.cp_r(File.join(assignment_dir, 'test'), File.join(repo_assignment_dir, 'test'))
-        end
-      end
-
-      # Copy the lib folder
-      if File.exists?(File.join(assignment_dir, 'lib'))
-        FileUtils.cp_r(File.join(assignment_dir, 'lib'), repo_assignment_dir)
-      end
-
-      # Copy the parse folder
-      if File.exists?(File.join(assignment_dir, 'parse'))
-        FileUtils.cp_r(File.join(assignment_dir, 'parse'), repo_assignment_dir)
+  def run_autotester_command(command, server_kwargs)
+    server_username = Rails.configuration.x.autotest.server_username
+    server_command = Rails.configuration.x.autotest.server_command
+    output = ''
+    if server_username.nil?
+      # local cancellation with no authentication
+      args = [server_command, command, '-j', JSON.generate(server_kwargs)]
+      output, status = Open3.capture2e(*args)
+      if status.exitstatus != 0
+        raise output
       end
     else
-      raise I18n.t('automated_tests.dir_not_exist', {:dir => assignment_dir})
-    end
-  end
-
-  # Execute Ant which will run the tests against the students' code
-  def run_ant_file(result, assignment, repo_dest_dir)
-    # Check if the repository where you want to copy Ant files to exists
-    unless File.exists?(repo_dest_dir)
-      raise I18n.t('automated_tests.dir_not_exist', {:dir => repo_dest_dir})
-    end
-
-    # Go to the directory where the Ant program must be run
-    repo_assignment_dir = File.join(repo_dest_dir, assignment.short_identifier)
-    pwd = FileUtils.pwd
-    FileUtils.cd(repo_assignment_dir)
-
-    # Execute Ant and log output in a temp logfile
-    logfile = 'build_log.xml'
-    system ("ant -logger org.apache.tools.ant.DefaultLogger -logfile #{logfile}")
-
-    # Change back to the Rails Working directory
-    FileUtils.cd(pwd)
-
-    # File to store build details
-    filename = I18n.l(Time.zone.now, :format => :ant_date) + '.log'
-    # Status of Ant build
-    status = ''
-
-    # Handle output depending on if the system command:
-    # - executed successfully (ie. Ant returns a BUILD SUCCESSFUL exit(0))
-    # - failed (ie. Ant returns a BUILD FAILED exit(1) possibly due to a compilation issue) or
-    # - errored out for an unknown reason (ie. Ant returns exit != 0 or 1)
-    if $?.exitstatus == 0
-      # Build ran succesfully
-      status = 'success'
-    elsif $?.exitstatus == 1
-      # Build failed
-      status = 'failed'
-
-      # Go back to the directory where the Ant program must be run
-      pwd = FileUtils.pwd
-      FileUtils.cd(repo_assignment_dir)
-
-      # Re-run in verbose mode and log issues for diagnosing purposes
-      system ("ant -logger org.apache.tools.ant.XmlLogger -logfile #{logfile} -verbose")
-
-      # Change back to the Rails Working directory
-      FileUtils.cd(pwd)
-    else
-      # Otherwise, some other unknown error with Ant has occurred so we simply log
-      # the output for problem diagnosing purposes.
-      status = 'error'
-    end
-
-    # Read in test output logged in build_log.xml
-    file = File.open(File.join(repo_assignment_dir, logfile), 'r')
-    data = String.new
-    file.each_line do |line|
-      data += line
-    end
-    file.close
-
-    # If the build was successful, send output to parser(s)
-    if $?.exitstatus == 0
-      data = parse_test_output(repo_assignment_dir, assignment, logfile, data)
-    end
-
-    # Create TestResult object
-    # (Build failures and errors will be logged and stored as well for diagnostic purposes)
-    TestResult.create(:filename => filename,
-      :file_content => data,
-      :submission_id => result.submission.id,
-      :status => status,
-      :user_id => @current_user.id)
-  end
-
-  # Send output to parser(s) if any
-  def parse_test_output(repo_assignment_dir, assignment, logfile, data)
-    # Store test output
-    output = data
-
-    # If any test parsers exist, execute Ant's 'parse' target
-    if assignment.test_files.find_by_filetype('parse')
-      # Go to the directory where the Ant program must be run
-      pwd = FileUtils.pwd
-      FileUtils.cd(repo_assignment_dir)
-
-      # Run Ant to parse test output
-      system ("ant parse -logger org.apache.tools.ant.DefaultLogger -logfile #{logfile} -Doutput=#{data}")
-
-      # Change back to the Rails Working directory
-      FileUtils.cd(pwd)
-
-      # Read in test output logged in logfile
-      file = File.open(File.join(repo_assignment_dir, logfile), 'r')
-      output = String.new
-      file.each_line do |line|
-        output += line
+      # local or remote cancellation with authentication
+      server_host = Rails.configuration.x.autotest.server_host
+      Net::SSH.start(server_host, server_username, auth_methods: ['publickey']) do |ssh|
+        args = "#{server_command} #{command} -j '#{JSON.generate(server_kwargs)}'"
+        output = ssh.exec!(args)
+        if output.exitstatus != 0
+          raise output
+        end
       end
-      file.close
     end
-
-    # Return parsed (or unparsed) test output
     output
+  end
+
+  private
+
+  def server_api_key
+    server_host = Rails.configuration.x.autotest.server_host
+    server_user = TestServer.find_or_create_by(user_name: server_host) do |user|
+      user.first_name = 'Autotest'
+      user.last_name = 'Server'
+      user.hidden = true
+    end
+    server_user.set_api_key
+
+    server_user.api_key
+  rescue ActiveRecord::RecordNotUnique
+    # find_or_create_by is not atomic, there could be race conditions on creation: we just retry until it succeeds
+    retry
   end
 end

@@ -1,0 +1,6 @@
+pt:
+  activerecord:
+    models:
+      mark:
+        one: "Nota"
+        other: "Notas"

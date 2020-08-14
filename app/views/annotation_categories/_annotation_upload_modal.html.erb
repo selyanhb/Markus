@@ -1,0 +1,29 @@
+<%= content_for :modal_id, 'upload_dialog' %>
+<%= content_for :modal_title, t('annotation_categories.upload.title') %>
+<%= content_for :modal_open_link, '#uploadModal' %>
+
+<%= content_for :modal_content do %>
+
+  <%= t('upload_help_html', section_id: AnnotationCategory.name.pluralize.underscore.dasherize) %>
+  <%= form_tag({ action: 'upload',
+                 id: @assignment.id },
+               { multipart: true }) do %>
+    <!-- Script for disabling upload button. -->
+    <%= javascript_include_tag 'upload_button_control.js',
+                               id: 'annotation_upload',
+                               upload_id: 'upload_file',
+                               button_id: 'button_upload' %>
+    <p><%= file_field_tag :upload_file, required: true %></p>
+    <div>
+      <%= label_tag t('encoding') %>
+      <%= select_tag(:encoding, options_for_select(@encodings)) %>
+    </div>
+    <section class='dialog-actions'>
+      <%= submit_tag t(:upload),
+                     data: { disable_with: t(:uploading_please_wait) },
+                     id: 'button_upload',
+                     disabled: true %>
+      <input type='reset' value='<%= t(:cancel) %>'/>
+    </section>
+  <% end %>
+<% end %>

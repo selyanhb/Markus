@@ -1,11 +1,19 @@
-<% [:error, :success, :warning, :notice].each do |key| -%>
-  <% unless flash[key].nil? -%>
-    <% if flash[key].is_a?(Array) -%>
-      <% flash[key].each do |msg| -%>
-        <%= content_tag :div, msg, :class => key %>
-      <% end -%>
-    <% else -%>
-      <%= content_tag :div, flash[key], :class => key %>
-    <% end -%>
-  <% end -%>
-<% end -%>
+<% flash.discard.inspect %> <!-- keep this line until issue #3342 has been resolved (somehow it fixes it) -->
+<% [:notice, :error, :success, :warning].each do |key| %>
+  <% if flash[key].nil? %>
+    <div class="<%= key.to_s %>" style="display: none">
+      <a class="hide-flash" onclick="$(this).parent().hide()">&nbsp;</a>
+      <div class="flash-content"></div>
+    </div>
+  <% else %>
+    <% flash[key] = [flash[key]] unless flash[key].respond_to?(:each) %>
+    <div class="<%= key.to_s %>">
+      <a class="hide-flash" onclick="$(this).parent().hide()">&nbsp;</a>
+      <div class="flash-content">
+        <% flash[key].each do |content| %>
+          <p><%= content.html_safe %></p>
+        <% end %>
+      </div>
+    </div>
+  <% end %>
+<% end %>

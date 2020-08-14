@@ -1,5 +1,4 @@
-require 'migration_helpers'
-class CreateRubricCriteria < ActiveRecord::Migration
+class CreateRubricCriteria < ActiveRecord::Migration[4.2]
   extend MigrationHelpers
   def self.up
     create_table :rubric_criteria do |t|
@@ -10,7 +9,7 @@ class CreateRubricCriteria < ActiveRecord::Migration
 
       t.timestamps
     end
-    add_index :rubric_criteria, [:assignment_id, :name], :unique => true
+    add_index :rubric_criteria, [:assignment_id, :name], :unique => true, name: :rubric_critera_index_1
     foreign_key(:rubric_criteria, :assignment_id, :assignments)
 
   end

@@ -1,0 +1,14 @@
+en:
+  tags:
+    submissions_used:
+      zero: "0 submissions have this tag."
+      one: "1 submission has this tag."
+      other: "%{count} submissions have this tag."
+
+    results:
+      available_tags: "Available Tags"
+      current_tags: "Current Tags"
+      no_current_tags: "No tags have been used."
+      no_available_tags: "No more tags are left to be used."
+
+    use: "Use"

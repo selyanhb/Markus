@@ -1,65 +1,61 @@
-require File.expand_path('../boot', __FILE__)
+require_relative 'boot'
 
 require 'rails/all'
-require 'active_support/all'
-# in order to paginate static arrays
-require 'will_paginate/array'
 
-# If you have a Gemfile, require the gems listed there, including any gems
+# Require the gems listed in Gemfile, including any gems
 # you've limited to :test, :development, or :production.
-Bundler.require(:default, Rails.env) if defined?(Bundler)
+Bundler.require(*Rails.groups)
 
+# Settings in config/environments/* take precedence over those specified here.
+# Application configuration can go into files in config/initializers
+# -- all .rb files in that directory are automatically loaded after loading
+# the framework and any gems in your application.
 module Markus
   class Application < Rails::Application
-  # Settings in config/environments/* take precedence over those specified here.
-  # Application configuration should go into files in config/initializers
-  # -- all .rb files in that directory are automatically loaded.
-  # See Rails::Configuration for more options.
 
-  # Only load the plugins named here, in the order given. By default, all plugins
-  # in vendor/plugins are loaded in alphabetical order.
-  # :all can be used as a placeholder for all plugins not explicitly named
-  config.plugins = [ :ssl_requirement, :auto_complete, :calendar_date_select ]
+    # Initialize configuration defaults for originally generated Rails version
+    config.load_defaults 6.0
 
-  # Javascripts files always loaded in views
-  config.action_view.javascript_expansions[:defaults] = %w(prototype rails application )
+    # Configure sensitive parameters which will be filtered from the log file
+    config.filter_parameters += [:password]
 
-  # Set this if MarkUs is not hosted under / of your Web-host.
-  # E.g. if MarkUs should be accessible by http://yourhost.com/markus/instance0
-  # then set the below directive to "/markus/instance0".
-  # config.action_controller.relative_url_root = ENV['RAILS_RELATIVE_URL_ROOT']
+    # Set the timezone
+    config.time_zone = 'Eastern Time (US & Canada)'
 
-  # Make Time.zone default to the specified zone, and make Active Record store time values
-  # in the database in UTC, and return them converted to the specified local zone.
-  # Run "rake -D time" for a list of tasks for finding time zone names. Uncomment to use default local time.
-  #
-  # Having a default time-zone configured is required, in order to have Time.zone available,
-  # which is used in the assignments_controller.rb
-  config.time_zone = 'Eastern Time (US & Canada)'
+    # Use Resque for background jobs
+    config.active_job.queue_adapter = :resque
 
-  # We need some additional load paths (e.g. for the API)
-  # Note for developers: in Ruby %W( a b c ) is equivalent to [ 'a', 'b', 'c' ]
-  config.autoload_paths += %W(
-                              #{::Rails.root}/lib
-                              #{::Rails.root}/app
-                              #{::Rails.root}/controllers/api
-                              #{::Rails.root}/lib/classes
-                              #{::Rails.root}/lib/validators
-                              )
-  # Load any local configuration that is kept out of source control
-  # (e.g. gems, patches).
-  if File.exists?(File.join(File.dirname(__FILE__), 'local_environment_override.rb'))
-   instance_eval File.read(File.join(File.dirname(__FILE__), 'local_environment_override.rb'))
-  end
-  # Configure the default encoding used in templates for Ruby 1.9.
-  config.encoding = "utf-8"
+    # Use json serializer for cookies
+    config.action_dispatch.cookies_serializer = :json
 
-  # Configure sensitive parameters which will be filtered from the log file.
-  config.filter_parameters += [:password]
+    # Set redis as the Rails cache store
+    # config.cache_store = :redis_cache_store
 
-  # Enable the asset pipeline
-  config.assets.enabled = true
-  config.assets.version = '1.0'
+    # Do not add autoload paths to load path.
+    config.add_autoload_paths_to_load_path = false
 
+    # Use RSpec as test framework
+    config.generators do |g|
+      g.test_framework :rspec
+    end
+
+    # Assets
+    # Enable the asset pipeline.
+    config.assets.enabled = true
+    # Suppress logger output for asset requests.
+    config.assets.quiet = true
+    # Add Yarn node_modules folder to the asset load path.
+    config.assets.paths << Rails.root.join('node_modules')
+
+    # Configure responders gem flash keys.
+    # NOTE: This didn't work when put in config/initializers/responders.rb.
+    config.responders.flash_keys = [:success, :error]
+
+    # TODO review initializers 01 and 02
+    # TODO review markus custom config format
+    # TODO handle namespaces properly for app/lib
+    # TODO migrate all javascript to webpack
+    # TODO try precompiled assets in production
+    # TODO database pool connections and unicorn workers
   end
 end

@@ -1,90 +1,71 @@
-require 'base64'
-
 # Scripting API handlers for MarkUs
 module Api
 
   # This is the parent class of all API controllers. Shared functionality of
   # all API controllers should go here.
   class MainApiController < ActionController::Base
+    include ActionPolicy::Controller, SessionHandler
 
-    before_filter :check_format, :authenticate
+    authorize :user, through: :current_user
+    rescue_from ActionPolicy::Unauthorized, with: :user_not_authorized
+
+    before_action :check_format, :authenticate
+    skip_before_action :verify_authenticity_token
 
     # Unless overridden by a subclass, all routes are 404's by default
     def index
-      render 'shared/http_status', :locals => {:code => '404', :message =>
-        HttpStatusHelper::ERROR_CODE['message']['404']}, :status => 404
+      render 'shared/http_status', locals: {code: '404', message:
+        HttpStatusHelper::ERROR_CODE['message']['404']}, status: 404
     end
 
     def show
-      render 'shared/http_status', :locals => {:code => '404', :message =>
-        HttpStatusHelper::ERROR_CODE['message']['404'] }, :status => 404
+      render 'shared/http_status', locals: {code: '404', message:
+        HttpStatusHelper::ERROR_CODE['message']['404'] }, status: 404
     end
 
     def create
-      render 'shared/http_status', :locals => {:code => '404', :message =>
-        HttpStatusHelper::ERROR_CODE['message']['404'] }, :status => 404
+      render 'shared/http_status', locals: {code: '404', message:
+        HttpStatusHelper::ERROR_CODE['message']['404'] }, status: 404
     end
 
     def update
-      render 'shared/http_status', :locals => {:code => '404', :message =>
-        HttpStatusHelper::ERROR_CODE['message']['404'] }, :status => 404
+      render 'shared/http_status', locals: {code: '404', message:
+        HttpStatusHelper::ERROR_CODE['message']['404'] }, status: 404
     end
 
     def destroy
-      render 'shared/http_status', :locals => {:code => '404', :message =>
-        HttpStatusHelper::ERROR_CODE['message']['404'] }, :status => 404
+      render 'shared/http_status', locals: {code: '404', message:
+        HttpStatusHelper::ERROR_CODE['message']['404'] }, status: 404
     end
 
     private
     # Auth handler for the MarkUs API. It uses the Authorization HTTP header to
     # determine the user who issued the request. With the Authorization
     # HTTP header comes a Base 64 encoded MD5 digest of the user's private key.
+    # Note that remote authentication is not supported. API key must be used.
     def authenticate
-      if MarkusConfigurator.markus_config_remote_user_auth
-        # Check if authentication was already done and REMOTE_USER was set
-        markus_auth_remote_user = request.env['HTTP_X_FORWARDED_USER']
-        if markus_auth_remote_user.present?
-          # REMOTE_USER authentication used, find user and bypass regular auth
-          @current_user = User.find_by_user_name(markus_auth_remote_user)
-        else
-          # REMOTE_USER_AUTH is true, but REMOTE_USER wasn't set, bail out
-          render 'shared/http_status', :locals => {:code => '403', :message =>
-            HttpStatusHelper::ERROR_CODE['message']['403']}, :status => 403
-          return
-        end
-      else
-        # REMOTE_USER authentication not used, proceed with regular auth
-        auth_token = parse_auth_token(request.headers['HTTP_AUTHORIZATION'])
-        # pretend resource not found if missing or authentication is invalid
-        if auth_token.nil?
-          render 'shared/http_status', :locals => {:code => '403', :message =>
-            HttpStatusHelper::ERROR_CODE['message']['403']}, :status => 403
-          return
-        end
-        # Find user by api_key_md5
-        @current_user = User.find_by_api_key(auth_token)
+      auth_token = parse_auth_token(request.headers['HTTP_AUTHORIZATION'])
+      # pretend resource not found if missing or authentication is invalid
+      if auth_token.nil?
+        render 'shared/http_status', locals: { code: '403', message:
+          HttpStatusHelper::ERROR_CODE['message']['403'] }, status: 403
+        return
       end
 
+      # Find user by api_key_md5
+      @current_user = User.find_by_api_key(auth_token)
       if @current_user.nil?
         # Key/username does not exist, return 403 error
-        render 'shared/http_status', :locals => {:code => '403', :message =>
-          HttpStatusHelper::ERROR_CODE['message']['403']}, :status => 403
+        render 'shared/http_status', locals: {code: '403', message:
+          HttpStatusHelper::ERROR_CODE['message']['403']}, status: 403
         return
-      elsif markus_auth_remote_user.blank?
-        # see if the MD5 matches only if REMOTE_USER wasn't used
-        curr_user_md5 = Base64.decode64(@current_user.api_key)
-        if Base64.decode64(auth_token) != curr_user_md5
-          # MD5 mismatch, return 403 error
-          render 'shared/http_status', :locals => {:code => '403', :message =>
-            HttpStatusHelper::ERROR_CODE['message']['403']}, :status => 403
-          return
-        end
       end
+
       # Student's aren't allowed yet
       if @current_user.student?
-        # API is available for TAs and Admins only
-        render 'shared/http_status', :locals => {:code => '403', :message =>
-          HttpStatusHelper::ERROR_CODE['message']['403']}, :status => 403
+        # API is available for TAs, Admins and TestServers only
+        render 'shared/http_status', locals: {code: '403', message:
+          HttpStatusHelper::ERROR_CODE['message']['403']}, status: 403
       end
     end
 
@@ -99,7 +80,7 @@ module Api
       request_format = request.format.symbol
       if request_format != :xml && request_format != :json
         # 406 is the default status code when the format is not support
-        render :nothing => true, :status => 406
+        head :not_acceptable
       end
     end
 
@@ -113,71 +94,19 @@ module Api
       end
     end
 
-    # Helper method for filtering, limit, offset
-    # Optionally accepts a collection - an object of class Active Record::Relation
-    def get_collection(collection_class, collection = nil)
-      # We'll append .where, .limit, and .offset to the collection
-      # Ignore default_scope order, always order by id to be consistent
-      if collection
-        collection = collection.order('id')
+    # Helper method for filtering
+    # Ignores default_scope order, always order by id to be consistent
+    #
+    # Renders an error message and returns false if the filters are malformed
+    def get_collection(collection)
+      filter_params = params[:filter] ? params[:filter].permit(self.class::DEFAULT_FIELDS) : {}
+      if !params[:filter].nil? && !params[:filter].empty? && filter_params.empty?
+        render 'shared/http_status', locals: { code: '422', message:
+          'Invalid or malformed parameter values' }, status: 422
+        false
       else
-        collection = collection_class.order('id')
+        collection.order('id').where(filter_params)
       end
-
-      filters = {}
-      # params[:filter] will match the following format:
-      # param:argument,param:argument,param:argument...
-      unless params[:filter].blank?
-        valid_filters = /(\w+:\w+,{0,1})+/.match(params[:filter])
-        unless valid_filters.nil?
-          valid_filters.to_s.split(',').each do |filter|
-            key, value = filter.split(':')
-            if collection_class.column_names.include?(key)
-              key = key.to_sym
-
-              # Check if validation forces values to be numeric
-              numericality = false
-              collection_class.validators_on(key).each do |validator|
-                if validator.is_a?(ActiveModel::Validations::NumericalityValidator)
-                  collection = collection.where("#{key} = ?", value)
-                  numericality = true
-                  break
-                end
-              end
-
-              # Do a case-insensitive search if dealing with strings
-              unless numericality
-                collection = collection.where("lower(#{key}) = ?", value.downcase)
-              end
-            end
-          end
-        end
-      end
-
-      # Apply offsets and limits, or get all if they aren't set
-      collection = collection.offset(params[:offset].to_i) if !params[:offset].blank?
-      collection = collection.limit(params[:limit].to_i) if !params[:limit].blank?
-      collection = collection.all if filters.empty?
-    end
-
-    # Helper method handling which fields to render, given the provided default
-    # fields and those present in params[:fields]
-    def fields_to_render(default_fields)
-      fields = []
-      # params[:fields] will match the following format:
-      # argument,argument,argument...
-      unless params[:fields].blank?
-        filtered_fields = /(\w+,{0,1})+/.match(params[:fields])
-        unless filtered_fields.nil?
-          filtered_fields.to_s.split(',').each do |field|
-            field = field.to_sym
-            fields << field if default_fields.include?(field)
-          end
-        end
-      end
-
-      fields = default_fields if fields.empty?
-      fields
     end
 
     # Checks that the symbols provided in the array aren't blank in the params
@@ -186,6 +115,12 @@ module Api
         return true if params[param].blank?
       end
       false
+    end
+
+    def user_not_authorized
+      render 'shared/http_status',
+             locals: { code: '403', message: HttpStatusHelper::ERROR_CODE['message']['403'] },
+             status: 403
     end
   end
 end # end Api module

@@ -1,0 +1,267 @@
+@import 'common/core';
+
+/* Peer Review Styles */
+
+#peer_reviews {
+  display: block;
+  width: 100%;
+  padding-bottom: 10px;
+}
+
+#peer_review_selector_label {
+  float: left;
+  font-size: 14px;
+  margin-top: 13px !important;
+}
+
+#peer_review_selector {
+  margin-top: 7px;
+  margin-left: 20px;
+}
+
+#original_result_link {
+  margin-left: 20px;
+  font-size: 14px;
+}
+
+/* Panes content (for controlling the heights) */
+
+#codeviewer,
+#testviewer,
+#mark_viewer,
+#summary_viewer,
+#annotations_summary,
+#remark_request_tab,
+#feedback_file_content {
+  display: flex;
+  flex-basis: 600px;
+  flex-direction: column;
+  flex-grow: 1;
+  overflow: auto;
+  width: 100%;
+}
+
+
+/* Marks pane */
+
+.marks-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+
+  li {
+    border-bottom: 1px solid $light-grey;
+    padding: 5px;
+    width: 100%;
+    display: inline-block;
+  }
+
+  .unassigned {
+    background: $light-grey;
+    color: $grey;
+  }
+
+  .active-criterion,
+  .active-rubric {
+    box-shadow: inset 0 0 10px 0 $dark-blue;
+  }
+}
+
+.rubric-levels {
+  border: 1px solid $grey;
+  border-collapse: collapse;
+  margin-left: 1.5em;
+  width: calc(100% - 1.5em);
+
+  tr {
+    border-bottom: 1px solid $grey;
+    border-top: 1px solid $grey;
+  }
+
+  td {
+    padding-bottom: 0.75em;
+    padding-top: 0.75em;
+  }
+}
+
+.rubric_criterion {
+  &.collapsed {
+    .rubric-level:not(.selected):not(.old-mark) {
+      display: none;
+    }
+  }
+
+  .rubric-level {
+    cursor: pointer;
+    width: 100%;
+
+    &.selected {
+      background-color: $light-green;
+    }
+
+    &.old-mark:not(.selected) {
+      background: $light-yellow;
+    }
+  }
+
+  .rubric-level:not(.selected) {
+    background: $white;
+  }
+
+  .level-description {
+    padding-left: 0.5em;
+    width: 82%;
+  }
+}
+
+.expanded {
+  .criterion-description {
+    display: block;
+  }
+}
+
+.collapsed {
+  .criterion-description {
+    display: none;
+  }
+}
+
+.criterion-name {
+  color: $dark-blue;
+  cursor: pointer;
+  font-size: 1.1em;
+  font-weight: bold;
+  padding-bottom: 5px;
+
+  .arrow-down,
+  .arrow-up {
+    margin-right: 5px;
+  }
+}
+
+.criterion-description {
+  float: left;
+}
+
+.mark {
+  float: right;
+  font-weight: bold;
+  padding-left: 10px;
+  padding-right: 10px;
+  text-align: right;
+
+  input[type=text] {
+    font-weight: bold;
+    padding-right: 0.5em;
+    text-align: right;
+
+    &.invalid {
+      background-color: $light-red;
+    }
+  }
+}
+
+.old-mark:not(.rubric-level) {
+  float: right;
+  padding-right: 10px;
+}
+
+.checkbox-criterion-inputs {
+  padding-right: 0.5em;
+  text-align: right;
+
+  label {
+    min-width: 0;
+    padding-right: 0.5em;
+  }
+
+  input[type=radio] {
+    max-width: 20px;
+    min-width: 20px;
+  }
+}
+
+.mark-deductions {
+  clear: both;
+  padding-bottom: 5px;
+  padding-top: 2px;
+  text-align: right;
+}
+
+
+/* Resizable column panes */
+
+.flex-col {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+}
+
+#panes-content {
+  display: flex;
+  flex-grow: 1;
+  margin-top: 0.5em;
+  width: 100%;
+
+  #panes {
+    display: flex;
+    width: 100%;
+
+    @include breakpoint(small) {
+      display: block;
+    }
+  }
+
+  #left-pane,
+  #drag,
+  #right-pane {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    margin: 0;
+    padding: 0;
+    vertical-align: top;
+  }
+
+  #left-pane,
+  #right-pane {
+    overflow: auto;
+
+    @include breakpoint(small) {
+      display: block;
+      float: none;
+      width: 100% !important;
+    }
+  }
+
+  #left-pane {
+    width: 70%;
+    margin-right: 3px;
+
+    @include breakpoint(small) {
+      margin-bottom: 1em;
+      padding-right: 0;
+    }
+  }
+
+  #right-pane {
+    width: 29.5%;
+    margin-left: 3px;
+
+    @include breakpoint(small) {
+      padding-left: 0;
+    }
+  }
+
+  #drag {
+    background: #ccc;
+    cursor: col-resize;
+    position: inherit;
+    width: 4px;
+
+    @include breakpoint(small) {
+      display: none;
+    }
+  }
+}

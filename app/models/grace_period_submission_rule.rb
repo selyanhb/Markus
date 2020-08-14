@@ -1,31 +1,21 @@
 class GracePeriodSubmissionRule < SubmissionRule
 
-  # When Students commit code after the collection time, MarkUs should warn
-  # the Students with a message saying that the due date has passed, and the
-  # work they're submitting will probably not be graded
-  def commit_after_collection_message
-    I18n.t 'submission_rules.grace_period_submission_rule.commit_after_collection_message'
-  end
-
-  def after_collection_message
-    I18n.t 'submission_rules.grace_period_submission_rule.after_collection_message'
-  end
-
-  # This message will be dislayed to Students on viewing their file manager
+  # This message will be displayed to Students on viewing their file manager
   # after the due date has passed, but before the calculated collection date.
   def overtime_message(grouping)
 
     # We need to know how many grace credits this grouping has left...
     grace_credits_remaining = grouping.available_grace_credits
     # How far are we into overtime?
-    overtime_hours = calculate_overtime_hours_from(Time.zone.now)
+    overtime_hours = calculate_overtime_hours_from(Time.zone.now, grouping)
     grace_credits_to_use = calculate_deduction_amount(overtime_hours)
     if grace_credits_remaining < grace_credits_to_use
-      # This grouping is out of grace credits.
-      I18n.t 'submission_rules.grace_period_submission_rule.overtime_message_without_days_left'
+      # This grouping doesn't have enough grace credits.
+      I18n.t 'grace_period_submission_rules.overtime_message_without_credits_left'
     else
-      # This grouping still has some grace credits to spend.
-      I18n.t 'submission_rules.grace_period_submission_rule.overtime_message_with_days_left', :grace_credits_remaining => grace_credits_remaining, :grace_credits_to_use => grace_credits_to_use
+      # This grouping has enough grace credits to spend.
+      I18n.t 'grace_period_submission_rules.overtime_message_with_credits_left',
+             grace_credits_remaining: grace_credits_remaining, grace_credits_to_use: grace_credits_to_use
     end
   end
 
@@ -35,22 +25,21 @@ class GracePeriodSubmissionRule < SubmissionRule
   end
 
   def apply_submission_rule(submission)
-
+    return submission if submission.is_empty
+    due_date = submission.grouping.due_date
     # If we aren't overtime, we don't need to apply a rule
-    return submission if submission.revision_timestamp <= assignment.due_date
+    return submission if submission.revision_timestamp <= due_date
 
     # So we're overtime.  How far are we overtime?
     collection_time = submission.revision_timestamp
-    due_date = assignment.due_date
-
-
-    overtime_hours = calculate_overtime_hours_from(collection_time)
+    grouping = submission.grouping
+    overtime_hours = calculate_overtime_hours_from(collection_time, grouping)
     # Now we need to figure out how many Grace Credits to deduct
     deduction_amount = calculate_deduction_amount(overtime_hours)
 
     #Get rid of any previous deductions for this assignment, so as not to
     #give duplicate deductions upon multiple calls to this method
-    remove_deductions(submission)
+    remove_deductions(grouping)
 
     # And how many grace credits are available to this grouping
     available_grace_credits = submission.grouping.available_grace_credits
@@ -70,7 +59,7 @@ class GracePeriodSubmissionRule < SubmissionRule
     elsif available_grace_credits < deduction_amount
       grouping = submission.grouping
       submission.destroy
-      collection_time = calculate_collection_date_from_credits(available_grace_credits)
+      collection_time = calculate_collection_date_from_credits(available_grace_credits, due_date)
       submission = Submission.create_by_timestamp(grouping, collection_time.localtime)
       # And now, a little recursion...
       return assignment.submission_rule.apply_submission_rule(submission)
@@ -89,18 +78,10 @@ class GracePeriodSubmissionRule < SubmissionRule
     submission
   end
 
-  def description_of_rule
-    I18n.t 'submission_rules.grace_period_submission_rule.description'
-  end
-
-  def grader_tab_partial
-    'submission_rules/grace_period/grader_tab'
-  end
-
   #Remove all deductions for this assignment from all accepted members of
-  #submission, so that any new deductions for the assignemnt will not be duplicates
-  def remove_deductions(submission)
-    student_memberships = submission.grouping.accepted_student_memberships
+  #grouping, so that any new deductions for the assignemnt will not be duplicates
+  def remove_deductions(grouping)
+    student_memberships = grouping.accepted_student_memberships
 
     student_memberships.each do |student_membership|
       deductions = student_membership.user.grace_period_deductions
@@ -110,6 +91,7 @@ class GracePeriodSubmissionRule < SubmissionRule
           deduction.destroy
         end
       end
+      deductions.reload
     end
   end
 
@@ -133,14 +115,14 @@ class GracePeriodSubmissionRule < SubmissionRule
 
   # Given the number of credits remaining, calculate the collection_date
   # for a Submission
-  def calculate_collection_date_from_credits(grace_credits)
+  def calculate_collection_date_from_credits(grace_credits, due_date)
     hours_after_due_date = 0
     periods.each do |period|
       hours_after_due_date = hours_after_due_date + period.hours
       grace_credits = grace_credits - 1
       break if grace_credits == 0
     end
-    assignment.due_date + hours_after_due_date.hours
+    due_date + hours_after_due_date.hours
   end
 
 end

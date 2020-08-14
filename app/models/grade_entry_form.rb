@@ -1,283 +1,274 @@
-include CsvHelper
-require 'iconv'
-
 # GradeEntryForm can represent a test, lab, exam, etc.
 # A grade entry form has many columns which represent the questions and their total
 # marks (i.e. GradeEntryItems) and many rows which represent students and their
 # marks on each question (i.e. GradeEntryStudents).
-class GradeEntryForm < ActiveRecord::Base
-  has_many                  :grade_entry_items, :dependent => :destroy
-  has_many                  :grade_entry_students, :dependent => :destroy
-  has_many                  :grades, :through => :grade_entry_items
+class GradeEntryForm < Assessment
+  has_many                  :grade_entry_items,
+                            -> { order(:position) },
+                            dependent: :destroy,
+                            inverse_of: :grade_entry_form,
+                            foreign_key: :assessment_id
 
-  # Call custom validator in order to validate the date attribute
-  # :date => true maps to DateValidator (:custom_name => true maps to CustomNameValidator)
-  # Look in lib/validators/* for more info
-  validates                 :date, :date => true
+  has_many                  :grade_entry_students,
+                            dependent: :destroy,
+                            inverse_of: :grade_entry_form,
+                            foreign_key: :assessment_id
 
-  validates_presence_of     :short_identifier
-  validates_uniqueness_of   :short_identifier, :case_sensitive => true
+  has_many                  :grades, through: :grade_entry_items
 
-  accepts_nested_attributes_for :grade_entry_items, :allow_destroy => true
+  accepts_nested_attributes_for :grade_entry_items, allow_destroy: true
 
+  after_create :create_all_grade_entry_students
+
+  # Set the default order of spreadsheets: in ascending order of id
+  default_scope { order('id ASC') }
+
+  # Constants
   BLANK_MARK = ''
 
   # The total number of marks for this grade entry form
   def out_of_total
-    grade_entry_items.sum('out_of').round(2)
-  end
-
-  # Determine the total mark for a particular student
-  def calculate_total_mark(student_id)
-    # Differentiate between a blank total mark and a total mark of 0
-    total = BLANK_MARK
-
-    grade_entry_student = self.grade_entry_students.find_by_user_id(student_id)
-    if grade_entry_student
-      total = grade_entry_student.grades.sum('grade').round(2)
-    end
-
-    if (total == 0) && self.all_blank_grades?(grade_entry_student)
-      total = BLANK_MARK
+    total = 0
+    grade_entry_items.each do |grade_entry_item|
+      unless grade_entry_item.bonus
+        total += grade_entry_item.out_of
+      end
     end
     total
   end
 
   # Determine the total mark for a particular student, as a percentage
-  def calculate_total_percent(student_id)
-    total = self.calculate_total_mark(student_id)
-    percent = BLANK_MARK
+  def calculate_total_percent(grade_entry_student)
+    unless grade_entry_student.nil?
+      total_grades = grade_entry_student_total_grades
+      ges_total_grade = total_grades[grade_entry_student.id]
+    end
 
-    if total != BLANK_MARK
-      percent = (total / self.out_of_total) * 100
+    percent = BLANK_MARK
+    out_of = self.out_of_total
+
+    # Check for NA mark f or division by 0
+    unless ges_total_grade.nil? || out_of == 0
+        percent = (ges_total_grade / out_of) * 100
     end
 
     percent
   end
 
-  # Determine the average of all of the students' marks that have been
-  # released so far (return a percentage).
-  def calculate_released_average
-    totalMarks = 0
-    numReleased = 0
+  # Return a hash of each grade_entry_student's total_grade
+  def grade_entry_student_total_grades
+    if defined? @ges_total_grades
+      return @ges_total_grades
+    end
 
-    grade_entry_students = self.grade_entry_students.all(:conditions => { :released_to_student => true })
-    grade_entry_students.each do |grade_entry_student|
-      totalMark = self.calculate_total_mark(grade_entry_student.user_id)
-      if totalMark != BLANK_MARK
-        totalMarks += totalMark
-        numReleased += 1
+    total_grades = Hash[
+      grade_entry_students.where.not(total_grade: nil).pluck(:id, :total_grade)
+    ]
+    @ges_total_grades = total_grades
+    total_grades
+  end
+
+  # An array of all active grade_entry_students' percentage total grades that are not nil
+  def percentage_grades_array
+    if defined? @grades_array
+      return @grades_array
+    end
+
+    grades = Array.new
+    out_of = out_of_total
+
+    grade_entry_students.joins(:user).where('users.hidden': false).find_each do |grade_entry_student|
+      ges_total_grade = grade_entry_student.total_grade
+      if !ges_total_grade.nil? && out_of != 0
+        grades.push((ges_total_grade / out_of) * 100 )
       end
     end
 
-    # Watch out for division by 0
-    if numReleased == 0
-      return 0
-    end
-
-    ((totalMarks / numReleased) / self.out_of_total) * 100
+    @grades_array = grades
+    grades
   end
 
-  # Return whether or not the given student's grades are all blank
-  # (Needed because ActiveRecord's "sum" method returns 0 even if
-  #  all the grade.grade values are nil and we need to distinguish
-  #  between a total mark of 0 and a blank mark.)
-  def all_blank_grades?(grade_entry_student)
-    grades = grade_entry_student.grades
-    grades_without_nils = grades.select do |grade|
-      !grade.grade.nil?
-    end
-    grades_without_nils.blank?
+  # Returns grade distribution for a grade entry form for all students
+  def grade_distribution_array(intervals = 20)
+    data = percentage_grades_array
+    data.extend(Histogram)
+    histogram = data.histogram(intervals, :min => 1, :max => 100, :bin_boundary => :min, :bin_width => 100 / intervals)
+    distribution = histogram.fetch(1)
+    distribution[0] = distribution.first + data.count{ |x| x < 1 }
+    distribution[-1] = distribution.last + data.count{ |x| x > 100 }
+
+    return distribution
   end
 
-  # Given two last names, construct an alphabetical category for pagination.
-  # eg. If the input is "Albert" and "Auric", return "Al" and "Au".
-  def construct_alpha_category(last_name1, last_name2, alpha_categories, i)
-    sameSoFar = true
-    index = 0
-    length_of_shorter_name = [last_name1.length, last_name2.length].min
-
-    # Attempt to find the first character that differs
-    while sameSoFar && (index < length_of_shorter_name)
-      char1 = last_name1[index].chr
-      char2 = last_name2[index].chr
-
-      sameSoFar = (char1 == char2)
-      index += 1
-    end
-
-    # Form the category name
-    if sameSoFar and (index < last_name1.length)
-      # There is at least one character remaining in the first name
-      alpha_categories[i] << last_name1[0,index+1]
-      alpha_categories[i+1] << last_name2[0, index]
-    elsif sameSoFar and (index < last_name2.length)
-      # There is at least one character remaining in the second name
-      alpha_categories[i] << last_name1[0,index]
-      alpha_categories[i+1] << last_name2[0, index+1]
-    else
-      alpha_categories[i] << last_name1[0, index]
-      alpha_categories[i+1] << last_name2[0, index]
-    end
-
-    alpha_categories
+  # Returns the average of all active student marks.
+  def calculate_average
+    percentage_grades = percentage_grades_array
+    percentage_grades.blank? ? 0 : DescriptiveStatistics.mean(percentage_grades)
   end
 
-  # An algorithm for determining the category names for alphabetical pagination
-  def alpha_paginate(all_grade_entry_students, per_page, total_pages)
-    alpha_categories = Array.new(2 * total_pages){[]}
-    alpha_pagination = []
-
-    if total_pages == 0
-      return alpha_pagination
-    end
-
-    i = 0
-    (1..(total_pages - 1)).each do |page|
-      grade_entry_students1 = all_grade_entry_students.paginate(:per_page => per_page, :page => page)
-      grade_entry_students2 = all_grade_entry_students.paginate(:per_page => per_page, :page => page+1)
-
-      # To figure out the category names, we need to keep track of the first and last students
-      # on a particular page and the first student on the next page. For example, if these
-      # names are "Alwyn, Anderson, and Antheil", the category for this page would be:
-      # "Al-And".
-      first_student = grade_entry_students1.first.last_name
-      last_student = grade_entry_students1.last.last_name
-      next_student = grade_entry_students2.first.last_name
-
-      # Update the possible categories
-      alpha_categories = self.construct_alpha_category(first_student, last_student,
-                                                       alpha_categories, i)
-      alpha_categories = self.construct_alpha_category(last_student, next_student,
-                                                       alpha_categories, i+1)
-
-      i += 2
-    end
-
-    # Handle the last page
-    page = total_pages
-    grade_entry_students = all_grade_entry_students.paginate(:per_page => per_page, :page => page)
-    first_student = grade_entry_students.first.last_name
-    last_student = grade_entry_students.last.last_name
-
-    alpha_categories = self.construct_alpha_category(first_student, last_student, alpha_categories, i)
-
-    # We can now form the category names
-    j=0
-    (1..total_pages).each do |i|
-      alpha_pagination << (alpha_categories[j].max + '-' + alpha_categories[j+1].max)
-      j += 2
-    end
-
-    return alpha_pagination
+  # Returns the median of all active student marks.
+  def calculate_median
+    percentage_grades = percentage_grades_array
+    percentage_grades.blank? ? 0 : DescriptiveStatistics.median(percentage_grades)
   end
 
-  # Get a CSV report of the grades for this grade entry form
-  def get_csv_grades_report
-    students = Student.all(:conditions => {:hidden => false}, :order => 'user_name')
-    CsvHelper::Csv.generate do |csv|
+  # Determine the number of active grade_entry_students that have been given a mark.
+  def count_non_nil
+    percentage_grades = percentage_grades_array
+    percentage_grades.blank? ? 0 : percentage_grades.size
+  end
 
-      # The first row in the CSV file will contain the question names
-      final_result = []
-      final_result.push('')
-      grade_entry_items.each do |grade_entry_item|
-        final_result.push(grade_entry_item.name)
-      end
-      csv << final_result
+  def calculate_failed
+    percentage_grades = percentage_grades_array
+    percentage_grades.blank? ? 0 : percentage_grades.count { |mark| mark < 50 }
+  end
 
-      # The second row in the CSV file will contain the question totals
-      final_result = []
-      final_result.push('')
-      grade_entry_items.each do |grade_entry_item|
-        final_result.push(grade_entry_item.out_of)
-      end
-      csv << final_result
+  def calculate_zeros
+    percentage_grades = percentage_grades_array
+    percentage_grades.blank? ? 0 : percentage_grades.count(&:zero?)
+  end
 
-      # The rest of the rows in the CSV file will contain the students' grades
-      students.each do |student|
-        final_result = []
-        final_result.push(student.user_name)
-        grade_entry_student = self.grade_entry_students.find_by_user_id(student.id)
+  # Create grade_entry_student for each student in the course
+  def create_all_grade_entry_students
+    columns = [:user_id, :assessment_id, :released_to_student]
 
-        # Check whether or not we have grades recorded for this student
-        if grade_entry_student.nil?
-          self.grade_entry_items.each do |grade_entry_item|
-            # Blank marks for each question
-            final_result.push(BLANK_MARK)
-          end
-          # Blank total percent
-          final_result.push(BLANK_MARK)
-        else
-          self.grade_entry_items.each do |grade_entry_item|
-            grade = grade_entry_student.grades.find_by_grade_entry_item_id(grade_entry_item.id)
-            if grade.nil?
-              final_result.push(BLANK_MARK)
-            else
-              final_result.push(grade.grade || BLANK_MARK)
-            end
-          end
-          total_percent = self.calculate_total_percent(student.id)
-          final_result.push(total_percent)
+    values = Student.all.map do |student|
+      # grade_entry_students.build(user_id: student.id, released_to_student: false)
+      [student.id, id, false]
+    end
+    GradeEntryStudent.import columns, values, validate: false, on_duplicate_key_ignore: true
+  end
+
+  def export_as_csv
+    students = Student.left_outer_joins(:grade_entry_students)
+                      .where(hidden: false, 'grade_entry_students.assessment_id': self.id)
+                      .order(:user_name)
+                      .pluck(:user_name, 'grade_entry_students.total_grade')
+    headers = []
+    # The first row in the CSV file will contain the column names
+    titles = [''] + self.grade_entry_items.pluck(:name)
+    titles << GradeEntryForm.human_attribute_name(:total) if self.show_total
+    headers << titles
+
+    # The second row in the CSV file will contain the column totals
+    totals = [GradeEntryItem.human_attribute_name(:out_of)] + self.grade_entry_items.pluck(:out_of)
+    totals << self.out_of_total if self.show_total
+    headers << totals
+
+    grade_data = self.grades
+                     .joins(:grade_entry_item, grade_entry_student: :user)
+                     .pluck('users.user_name', 'grade_entry_items.position', :grade)
+                     .group_by { |x| x[0] }
+    num_items = self.grade_entry_items.count
+    MarkusCsv.generate(students, headers) do |user_name, total_grade|
+      row = [user_name]
+      if grade_data.key? user_name
+        student_grades = Array.new(num_items, '')
+        grade_data[user_name].each do |g|
+          grade_index = g[1] - 1
+          student_grades[grade_index] = g[2].nil? ? '' : g[2]
         end
-        csv << final_result
+        row.concat(student_grades)
+        row << (total_grade.nil? ? '' : total_grade) if self.show_total
+      else
+        row.concat(Array.new(num_items, ''))
+        row << '' if self.show_total
       end
+      row
     end
   end
 
-  # Parse a grade entry form CSV file.
-  # grades_file is the CSV file to be parsed
-  # grade_entry_form is the grade entry form that is being updated
-  # invalid_lines will store all problematic lines from the CSV file
-  def self.parse_csv(grades_file, grade_entry_form, invalid_lines, encoding)
-    num_updates = 0
-    num_lines_read = 0
+  def from_csv(grades_data, overwrite)
+    grade_entry_students = Hash[
+      self.grade_entry_students.joins(:user).pluck('users.user_name', :id)
+    ]
+    all_grades = Set.new(
+      self.grades.where.not(grade: nil).pluck(:grade_entry_student_id, :grade_entry_item_id)
+    )
+
     names = []
     totals = []
-    grades_file = StringIO.new(grades_file.read)
-    if encoding != nil
-      grades_file = StringIO.new(Iconv.iconv('UTF-8', encoding, grades_file.read).join)
-    end
-
-    # Parse the question names
-    CsvHelper::Csv.parse(grades_file.readline) do |row|
-      unless CsvHelper::Csv.generate_line(row).strip.empty?
-        names = row
-        num_lines_read += 1
-      end
-    end
-
-    # Parse the question totals
-    CsvHelper::Csv.parse(grades_file.readline) do |row|
-      unless CsvHelper::Csv.generate_line(row).strip.empty?
-        totals = row
-        num_lines_read += 1
-      end
-    end
-
-    # Create/update the grade entry items
-    begin
-      GradeEntryItem.create_or_update_from_csv_rows(names, totals, grade_entry_form)
-      num_updates += 1
-    rescue RuntimeError => e
-      invalid_lines << names.join(',')
-      invalid_lines << totals.join(',') + ': ' + e.message unless invalid_lines.nil?
-    end
+    updated_columns = []
+    updated_grades = []
 
     # Parse the grades
-    CsvHelper::Csv.parse(grades_file.read) do |row|
-      next if CsvHelper::Csv.generate_line(row).strip.empty?
-      begin
-        if num_lines_read > 1
-          GradeEntryStudent.create_or_update_from_csv_row(row, grade_entry_form)
-          num_updates += 1
+    result = MarkusCsv.parse(grades_data, header_count: 2) do |row|
+      next unless row.any?
+      # grab names and totals from the first two rows
+      if names.empty?
+        names = row.drop(1)
+        next
+      elsif totals.empty?
+        totals = row.drop(1)
+        if self.show_total && names.last == GradeEntryForm.human_attribute_name(:total)
+          self.update_grade_entry_items(names[0...-1], totals[0...-1], overwrite)
+        else
+          self.update_grade_entry_items(names, totals, overwrite)
         end
-        num_lines_read += 1
-      rescue RuntimeError => e
-        error = e.message.is_a?(String) ? e.message : ''
-        invalid_lines << row.join(',') + ': ' + error unless invalid_lines.nil?
+        updated_columns = self.grade_entry_items.reload.pluck(:id)
+        next
+      end
+
+      s_id = grade_entry_students[row[0]]
+      raise CsvInvalidLineError if s_id.nil?
+
+      row.drop(1).zip(updated_columns).take([row.size - 1, updated_columns.size].min).each do |grade, item_id|
+        begin
+          new_grade = grade.blank? ? nil : Float(grade)
+        rescue ArgumentError
+          raise CsvInvalidLineError
+        end
+        if overwrite || !all_grades.member?([s_id, item_id])
+          updated_grades << {
+            grade_entry_student_id: s_id,
+            grade_entry_item_id: item_id,
+            grade: new_grade
+          }
+        end
       end
     end
-    return num_updates
+    Grade.import updated_grades,
+                 on_duplicate_key_update: { conflict_target: [:grade_entry_item_id, :grade_entry_student_id],
+                                            columns: [:grade] }
+    GradeEntryStudent.refresh_total_grades(updated_grades.map { |h| h[:grade_entry_student_id] })
+    result
   end
 
+  def update_grade_entry_items(names, totals, overwrite)
+    if names.size != totals.size || names.empty? || totals.empty?
+      raise "Invalid header rows: '#{names}' and '#{totals}'."
+    end
+
+    updated_items = []
+    names.size.times do |i|
+      updated_items << {
+        name: names[i],
+        out_of: totals[i],
+        position: i + 1,
+        assessment_id: self.id
+      }
+    end
+
+    # Delete old questions if we want to overwrite them
+    missing_items = self.grade_entry_items.where.not(name: names)
+    if overwrite
+      missing_items.destroy_all
+    else
+      i = names.size
+      missing_items.each do |item|
+        updated_items << {
+          name: item.name,
+          out_of: item.out_of,
+          position: i + 1,
+          assessment_id: item.assessment_id
+        }
+        i += 1
+      end
+    end
+
+    GradeEntryItem.import updated_items,
+                          on_duplicate_key_update: { conflict_target: [:name, :assessment_id],
+                                                     columns: [:out_of, :position] }
+    self.grade_entry_items.reload
+  end
 end

@@ -1,0 +1,57 @@
+Quality of Writing:
+    type: rubric
+    max_mark: 24.0
+    levels:
+        Beginner:
+            mark: 0.0
+            description: The essay is very poorly organized structure and gives no new information.
+        Capable:
+            mark: 10.0
+            description: The essay is poorly organized but gives new information.
+        Accomplished:
+            mark: 16.0
+            description: The essay is well-structure and conveys new information clearly.
+        level 3 criterion:
+            mark: 20.0
+            description: level 3 description
+        level 4 criterion:
+            mark: 24.0
+            description: level 4 description
+    ta_visible: true
+    peer_visible: false
+
+Grammar usage:
+    type: rubric
+    max_mark: 16.0
+    levels:
+        Beginner:
+            mark: 0.0
+            description: There are more than 5 grammar mistakes in this entire essay.
+        Intermediate:
+            mark: 4.0
+            description: Intermediate.
+        Accomplished:
+            mark: 8.0
+            description: Accomplished.
+        level 3 criterion:
+            mark: 12.0
+            description: level 3 description
+        level 4 criterion:
+            mark: 16.0
+            description: level 4 description
+    ta_visible: true
+    peer_visible: false
+
+Definition translation:
+    type: flexible
+    max_mark: 5.0
+    description: This is a flexible criterion and you can put either "Flexible" or "flexible".
+    ta_visible: true
+    peer_visible: false
+
+Proof header:
+    type: checkbox
+    max_mark: 2.0
+    description: This is one is a checkbox criterion and students either get full marks or 0 for this criterion.
+    ta_visible: true
+    peer_visible: false

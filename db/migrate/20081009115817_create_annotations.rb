@@ -1,6 +1,4 @@
-require 'migration_helpers'
-
-class CreateAnnotations < ActiveRecord::Migration
+class CreateAnnotations < ActiveRecord::Migration[4.2]
   extend MigrationHelpers
 
   def self.up

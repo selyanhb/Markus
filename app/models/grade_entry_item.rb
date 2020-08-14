@@ -1,53 +1,48 @@
 # GradeEntryItem represents column names (i.e. question names and totals)
 # in a grade entry form.
-class GradeEntryItem < ActiveRecord::Base
-  belongs_to  :grade_entry_form
+class GradeEntryItem < ApplicationRecord
 
-  has_many   :grades, :dependent => :destroy
-  has_many   :grade_entry_students, :through => :grades
+  belongs_to :grade_entry_form, inverse_of: :grade_entry_items, foreign_key: :assessment_id
 
-  validates_presence_of   :name
-  validates_presence_of   :out_of
+  has_many :grades, dependent: :delete_all
 
-  validates_associated    :grade_entry_form
+  has_many :grade_entry_students, through: :grades
 
-  validates_numericality_of :out_of, :greater_than_or_equal_to => 0,
-                            :message => I18n.t('grade_entry_forms.invalid_column_out_of')
-  validates_uniqueness_of   :name, :scope => :grade_entry_form_id,
-                            :message => I18n.t('grade_entry_forms.invalid_name')
+  validates_presence_of :name
+  validates_uniqueness_of :name,
+                          scope: :assessment_id
 
-  # Create new grade entry items (or update them if they already exist) using
-  # the first two rows from a CSV file
-  #
-  # These rows are formatted as follows:
-  # "",Q1,Q2,...
-  # "",Q1total,Q2total,...
-  #
-  # (We've included "" at the beginning of each line so that it is easy
-  # to upload grades directly from a spreadsheet where there would be a
-  # blank column heading in the first row in the table. The "" also
-  # appears at the beginning of the first two rows when downloading the
-  # grades as a CSV file so that the table is formatted nicely when using
-  # a program like Excel to import the CSV.)
-  def self.create_or_update_from_csv_rows(names, totals, grade_entry_form)
-    # The number of question names given should equal the number of question totals
-    if names.size != totals.size
-      raise I18n.t('grade_entry_forms.csv.incomplete_header')
+  validates_presence_of :out_of
+  validates_numericality_of :out_of,
+                            greater_than_or_equal_to: 0
+
+  validates_presence_of :position
+  validates_numericality_of :position, greater_than_or_equal_to: 0
+
+  BLANK_MARK = ''
+
+  # Determine the total mark for a particular student, as a percentage
+  def calculate_total_percent(grade)
+    percent = BLANK_MARK
+
+    # Check for NA mark or division by 0
+    unless grade.nil? || out_of == 0
+      percent = (grade / out_of) * 100
     end
-
-    # Make sure the first elements in names and totals are ""
-    unless names.shift == '' and totals.shift == ''
-      raise I18n.t('grade_entry_forms.csv.incomplete_header')
-    end
-
-    # Process the question names and totals
-    (0..(names.size - 1)).each do |i|
-      grade_entry_item = grade_entry_form.grade_entry_items.find_or_create_by_name(names[i])
-      grade_entry_item.out_of = totals[i]
-      unless grade_entry_item.save
-        raise RuntimeError.new(grade_entry_item.errors)
-      end
-    end
+    percent
   end
 
+  # Returns grade distribution for a grade entry item for each student
+  def grade_distribution_array(intervals = 20)
+    data = grades.where.not(grade: nil)
+             .pluck(:grade)
+             .map { |g| calculate_total_percent(g) }
+    data.extend(Histogram)
+    histogram = data.histogram(intervals, :min => 1, :max => 100, :bin_boundary => :min, :bin_width => 100 / intervals)
+    distribution = histogram.fetch(1)
+    distribution[0] = distribution.first + data.count{ |x| x < 1 }
+    distribution[-1] = distribution.last + data.count{ |x| x > 100 }
+
+    distribution
+  end
 end

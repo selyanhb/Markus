@@ -1,0 +1,6 @@
+fr:
+  activerecord:
+    models:
+      mark:
+        one: "Note"
+        one: "Notes"

@@ -1,0 +1,50 @@
+<% content_for :title, ExamTemplate.model_name.human.pluralize %>
+
+<% content_for :head do %>
+  <script>
+    <%= render partial: 'boot.js' %>
+  </script>
+<% end %>
+
+<% @heading_buttons = [
+    { link_text: t('exam_templates.create.add_new'),
+      link_path: '#',
+      html_options: { onclick:'modal_create_new.open()' } },
+    { link_text: t('exam_templates.split_pdf_log.view_logs'),
+      link_path: view_logs_assignment_exam_templates_path },
+] %>
+
+<!-- Modals -->
+<%= render partial: 'create_new_template',
+           layout: 'layouts/modal_dialog'  %>
+
+<% @exam_templates.each do |exam_template| %>
+  <fieldset>
+    <%= render partial: 'form',
+               locals: { exam_template: exam_template } %>
+    <hr>
+    <div class="student-info">
+      <h3><%= t('exam_templates.parsing.title') %></h3>
+      <p>
+        <%= render partial: 'student_info',
+                   locals: { exam_template: exam_template } %>
+      </p>
+    </div>
+    <hr>
+    <div class="generate-section">
+      <h3><%= t('exam_templates.generate.title') %></h3>
+      <p>
+        <%= render partial: 'generate_form',
+                   locals: { exam_template: exam_template } %>
+      </p>
+    </div>
+    <hr>
+    <div class="split-section">
+      <h3><%= t('exam_templates.split.title') %></h3>
+      <p>
+        <%= render partial: 'split_form',
+                   locals: { exam_template: exam_template } %>
+      </p>
+    </div>
+  </fieldset>
+<% end %>

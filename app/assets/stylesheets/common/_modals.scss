@@ -1,0 +1,33 @@
+@import 'constants';
+
+.react-modal {
+  background: $white;
+  border: 1px solid $grey;
+  left: 50%;
+  outline: none;
+  overflow: auto;
+  padding: 20px;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.modal-container {
+  display: flex;
+  justify-content: space-evenly;
+
+  > * {
+    padding: 5px;
+  }
+}
+
+.modal-container-vertical {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-evenly;
+  padding: 5px;
+
+  > * {
+    margin: 5px;
+  }
+}

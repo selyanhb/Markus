@@ -1,106 +1,49 @@
 <% if @current_user.admin? %>
-  <li class="level2">
-    <%= link_to I18n.t(:create_new_assignment),
-		:controller => 'assignments',
-		:action => 'new' %>
+  <li class='section'><%= t('menu.quick_links') %></li>
+  <li>
+    <%= link_to t('helpers.submit.create', model: Assignment.model_name.human),
+                controller: 'assignments',
+                action: 'new' %>
   </li>
-  <li class="level2">
-    <%= link_to I18n.t(:create_new_grade_entry_form),
-	        :controller => 'grade_entry_forms',
-		:action => 'new' %>
-  </li>
-  <li class="level2">
-    <div class="clear"></div><br><br>
-  </li>
-<% end %>
-
-
-<% Assignment.all(:order => 'short_identifier ASC').each do |assignment|
-  if assignment != @assignment
-    if (controller.controller_name == "assignments" &&
-          (controller.action_name == "index" or
-          controller.action_name == 'new')) ||
-          controller.controller_name == "results" or
-          controller.controller_name == "grade_entry_forms" or
-          controller.controller_name == "marks_graders"
-      if @current_user.student? %>
-        <li class="level2">
-          <%= link_to assignment.short_identifier,
-		      student_interface_assignment_path(assignment) %>
-        </li>
-      <% elsif @current_user.ta? %>
-        <li class="level2">
-          <%= link_to assignment.short_identifier,
-		      browse_assignment_submissions_path(assignment) %>
-		</li>
-      <% else %>
-        <li class="level2">
-          <%= link_to assignment.short_identifier,
-		      edit_assignment_path(assignment) %>
-		</li>
-      <% end %>
-    <% else %>
-      <li class="level2">
-      	<% # If the current controller is rubrics or flexible_criteria, we have to choose
-           # the appropritate controller according to the selected assignment's marking scheme type.
-           if controller.controller_name == 'rubrics' || controller.controller_name == 'flexible_criteria'
-		     if assignment.marking_scheme_type == Assignment::MARKING_SCHEME_TYPE[:rubric]
-               target_controller = 'rubrics'
-             else
-               target_controller = 'flexible_criteria'
-             end
-           else
-             target_controller = controller.controller_name
-           end %>
-        <% # If the current controller action is repo_browser, the drop down
-           # menu for assignments should go to browse, and not repo_browser
-           if controller.action_name == 'repo_browser'
-             controller.action_name = 'browse'
-           end %>
-		<%= link_to assignment.short_identifier,
-			    :controller => target_controller,
-			    :action => controller.action_name,
-			    :id => assignment.id,
-			    :assignment_id => assignment.id %>
-      </li>
-    <% end %>
-  <% else %>
-      <li class="level2">
-        <p id="drop_down_current_assignment">
-          <%= assignment.short_identifier %>
-        </p>
-      </li>
-  <% end %>
-<% end %>
-
-
-<% # Display grade entry forms in the dropdown menu
-%>
-<% GradeEntryForm.all(:order => 'short_identifier ASC').each do |grade_entry_form| %>
-  <% if grade_entry_form != @grade_entry_form %>
-    <% if @current_user.admin? %>
-      <li class="level2">
-        <%= link_to grade_entry_form.short_identifier,
-		    edit_grade_entry_form_path(grade_entry_form) %>
-      </li>
-    <% elsif @current_user.ta? %>
-      <li class="level2">
-        <%= link_to grade_entry_form.short_identifier,
-		    grades_grade_entry_form_path(grade_entry_form) %>
-      </li>
-    <% elsif @current_user.student? %>
-      <li class="level2">
-        <%= link_to grade_entry_form.short_identifier,
-		  student_interface_grade_entry_form_path(grade_entry_form) %>
-      </li>
-    <% end %>
-  <% else %>
-    <li class="level2">
-      <p id="drop_down_current_assignment">
-        <%= grade_entry_form.short_identifier %>
-      </p>
+  <% if Rails.configuration.x.scanned_exams.enable %>
+    <li>
+      <%= link_to t('helpers.submit.create', model: t('activerecord.models.scanned_assignment.one')),
+                  controller: 'assignments',
+                  action: 'new',
+                  scanned: true %>
     </li>
   <% end %>
+  <li>
+    <%= link_to t('helpers.submit.create', model: t('activerecord.models.timed_assignment.one')),
+                controller: 'assignments',
+                action: 'new',
+                timed: true %>
+  </li>
+  <li>
+    <%= link_to t('helpers.submit.create', model: GradeEntryForm.model_name.human),
+                controller: 'grade_entry_forms',
+                action: 'new' %>
+  </li>
 <% end %>
 
+<li class='section'><%= Assignment.model_name.human.pluralize %></li>
 
+<% if @current_user.student? %>
+  <% assignments = Assignment.where(is_hidden: false) %>
+  <% grade_entry_forms = GradeEntryForm.where(is_hidden: false) %>
+<% else %>
+  <% assignments = Assignment.all %>
+  <% grade_entry_forms = GradeEntryForm.all %>
+<% end %>
+
+<%= render partial: 'shared/assignment_dropdown_link',
+           collection: assignments,
+           as: :assignment,
+           locals: { active_id: @assignment&.id } %>
+
+<li class='section'><%= GradeEntryForm.model_name.human.pluralize %></li>
+
+<%= render partial: 'shared/grade_entry_form_dropdown_link',
+           collection: grade_entry_forms,
+           as: :grade_entry_form,
+           locals: { active_id: @grade_entry_form&.id } %>

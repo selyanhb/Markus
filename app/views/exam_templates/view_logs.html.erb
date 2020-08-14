@@ -1,0 +1,16 @@
+<% content_for :title, "#{SplitPdfLog.model_name.human.pluralize} - #{@assignment.short_identifier}" %>
+
+<% content_for :head %>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    makeExamScanLogTable(document.getElementById('exam_scan_log_table'),
+                         {assignment_id: <%= @assignment.id %>});
+  });
+</script>
+
+<% @heading_buttons = [
+  { link_text: t('exam_templates.back_to_exam_templates_page'),
+    link_path: assignment_exam_templates_path }]
+%>
+
+<div id="exam_scan_log_table"></div>

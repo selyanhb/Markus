@@ -1,345 +1,456 @@
-# Required for filtering locale prefixed requests
-require 'routing_filter'
-
-Markus::Application.routes.draw do
-  filter :locale
-
+Rails.application.routes.draw do
   # Install the default routes as the lowest priority.
-  root :controller => "main", :action => "login"
-   # API routes
-  namespace :api do
-    resources :users, :except => [:new, :edit]
-    resources :assignments, :except => [:new, :edit] do
-      resources :groups, :except => [:new, :edit] do
-        resources :submission_downloads, :except => [:new, :edit]
-        resources :test_results, :except => [:new, :edit]
-      end
-    end
-    resources :main_api
-  end
+  root controller: 'main', action: 'login', via: [:post, :get]
 
-  resources :admins do
-    collection do
-      post 'populate'
-    end
-  end
-
-  resources :assignments do
-
-    collection do
-      get 'download_csv_grades_report'
-      post 'update_group_properties_on_persist'
-      get 'delete_rejected'
-      post 'update_collected_submissions'
-      get 'download_assignment_list'
-      post 'upload_assignment_list'
-    end
-
-    member do
-      get 'refresh_graph'
-      get 'student_interface'
-      get 'update_group_properties_on_persist'
-      post 'invite_member'
-      get 'creategroup'
-      get 'join_group'
-      get 'deletegroup'
-      get 'decline_invitation'
-      post 'disinvite_member'
-      get 'render_test_result'
-    end
-
-    resources :rubrics do
-      member do
-        delete 'destroy'
-        get 'move_criterion'
-      end
-
-      collection do
-        post 'update_positions'
-        post 'csv_upload'
-        post 'yml_upload'
-        get 'download_csv'
-        get 'download_yml'
-      end
-    end
-
-    resources :flexible_criteria do
-      member do
-        delete 'destroy'
-        get 'move_criterion'
-      end
-
-      collection do
-        post 'upload'
-        post 'update_positions'
-        get 'download'
-      end
-    end
-
-    resources :automated_tests do
-      collection do
-        get 'manage'
-        post 'update' # because of collection
-        post 'update_positions'
-        get 'update_positions'
-        post 'upload'
-        get 'download'
-        get 'move_criterion'
-      end
-    end
-
-    resources :groups do
-
-      member do
-        post 'rename_group'
-        get 'rename_group_dialog'
-      end
-
-      collection do
-        post 'populate'
-        post 'populate_students'
-        get 'add_group'
-        get 'use_another_assignment_groups'
-        get 'manage'
-        post 'csv_upload'
-        get 'add_csv_group'
-        get 'download_grouplist'
-        get 'create_groups_when_students_work_alone'
-        get 'valid_grouping'
-        get 'invalid_grouping'
-        get 'global_actions'
-        get 'rename_group'
-        delete 'remove_group'
-        post 'add_group'
-        post 'global_actions'
-      end
-    end
-
-    resources :submissions do
-      collection do
-        get 'file_manager'
-        get 'browse'
-        post 'populate_file_manager'
-        get 'collect_all_submissions'
-        get 'download_simple_csv_report'
-        get 'download_detailed_csv_report'
-        get 'download_svn_export_list'
-        get 'download_svn_export_commands'
-        get 'download_svn_repo_list'
-        get 'collect_ta_submissions'
-        post 'update_submissions'
-        post 'populate_repo_browser'
-        post 'update_converted_pdfs'
-        get 'updated_files'
-        get 'replace_files'
-        get 'delete_files'
-        post 'update_files'
-        post 'server_time'
-        get 'download'
-        get 'download_groupings_files'
-      end
-
-      member do
-        get 'collect_and_begin_grading'
-        post 'manually_collect_and_begin_grading'
-        get 'repo_browser'
-        post 'repo_browser'
-        get 'downloads'
-      end
-
-      resources :results do
+  # optional path scope (denoted by the parentheses)
+  scope '(:locale)', locale: /en|es|fr|pt/  do
+    # API routes
+    namespace :api do
+      resources :users, except: [:new, :edit] do
         collection do
-          post 'update_mark'
-          get 'expand_criteria'
-          get 'collapse_criteria'
-          get 'expand_unmarked_criteria'
-          get 'edit'
+          post 'create_or_unhide'
+          put 'update_by_username'
+        end
+      end
+      resources :grade_entry_forms, only: [:show, :index, :create, :update] do
+        member do
+          put 'update_grades'
+        end
+      end
+      resources :assignments, except: [:new, :edit] do
+        resources :groups, except: [:new, :edit] do
+          collection do
+            get 'annotations'
+            get 'group_ids_by_name'
+          end
+          resources :submission_files, except: [:new, :edit] do
+            collection do
+              delete 'remove_file'
+              delete 'remove_folder'
+              post 'create_folders'
+            end
+          end
+          resources :feedback_files, except: [:new, :edit]
+          resources :test_group_results, except: [:new, :edit] do
+            resources :test_results, except: [:new, :edit]
+          end
+          member do
+            get 'annotations'
+            post 'add_annotations'
+            post 'add_members'
+            post 'create_extra_marks'
+            put 'update_marks'
+            put 'update_marking_state'
+            delete 'remove_extra_marks'
+          end
+        end
+        resources :starter_file_groups do
+          member do
+            get 'entries'
+            post 'create_file'
+            post 'create_folder'
+            delete 'remove_file'
+            delete 'remove_folder'
+            get 'download_entries'
+          end
+        end
+        member do
+          get 'test_files'
+          get 'grades_summary'
+          get 'test_specs'
+          post 'update_test_specs'
+        end
+      end
+      resources :main_api
+    end
+
+    resources :admins
+
+    resources :assignments do
+
+      collection do
+        get 'delete_rejected'
+        get 'download'
+        post 'upload'
+        get 'batch_runs'
+      end
+
+      member do
+        get 'download_starter_file_mappings'
+        get 'refresh_graph'
+        get 'view_summary'
+        post 'update_starter_file'
+        get 'peer_review'
+        get 'populate_starter_file_manager'
+        get 'summary'
+        get 'batch_runs'
+        post 'set_boolean_graders_options'
+        get 'stop_test'
+        get 'stop_batch_tests'
+        get 'switch_assignment'
+        put 'start_timed_assignment'
+        get 'starter_file'
+        put 'update_starter_file'
+      end
+
+      resources :starter_file_groups do
+        member do
+          get 'download_file'
+          get 'download_files'
+          post 'update_files'
+        end
+      end
+
+      resources :tags do
+        collection do
+          get 'download'
+          post 'upload'
+        end
+
+        member do
+          get 'edit_tag_dialog'
+        end
+      end
+
+      resources :criteria do
+        collection do
+          post 'update_positions'
+          post 'upload'
+          get  'download'
+        end
+      end
+
+      resources :automated_tests do
+        collection do
+          get 'manage'
+          post 'update' # because of collection
+          post 'update_positions'
+          get 'update_positions'
+          post 'upload'
+          get 'download'
+          get 'get_test_runs_students'
+          get 'populate_autotest_manager'
+          get 'download_file'
+          get 'download_files'
+          post 'upload_files'
+          get 'download_specs'
+          post 'upload_specs'
+        end
+      end
+
+      resources :exam_templates do
+        member do
+          get 'download'
+          get 'download_generate'
+          get 'show_cover'
+          get 'assign_errors'
+          get 'download_raw_split_file'
+          get 'download_error_file'
+          get 'error_pages'
+          patch 'add_fields'
+          patch 'generate'
+          patch 'split'
+          post 'fix_error'
+        end
+
+        collection do
+          get 'view_logs'
+        end
+      end
+
+      resources :groups do
+        collection do
+          get 'add_group'
+          post 'use_another_assignment_groups'
+          get 'manage'
+          get 'assign_scans'
+          get 'download'
+          get 'download_starter_file'
+          get 'get_names'
+          get 'assign_student_and_next'
+          get 'next_grouping'
+          post 'upload'
+          get 'add_csv_group'
+          get 'download_grouplist'
+          get 'create_groups_when_students_work_alone'
+          get 'valid_grouping'
+          get 'invalid_grouping'
+          get 'global_actions'
+          get 'rename_group'
+          delete 'remove_group'
+          post 'add_group'
+          post 'global_actions'
+          patch 'accept_invitation'
+          patch 'decline_invitation'
+          delete 'delete_rejected'
+          post 'invite_member'
+          patch 'disinvite_member'
+        end
+
+        member do
+          post 'rename_group'
+        end
+      end
+
+      resources :submissions, only: [:index] do
+        collection do
+          get 'populate_submissions_table'
+          get 'file_manager'
+          get 'browse'
+          get 'populate_file_manager'
+          get 'revisions'
+          post 'collect_submissions'
+          get 'uncollect_all_submissions'
+          post 'run_tests'
+          get 'download_svn_export_list'
+          get 'download_repo_checkout_commands'
+          get 'download_repo_list'
+          post 'set_result_marking_state'
+          post 'update_submissions'
+          get 'updated_files'
+          get 'replace_files'
+          get 'delete_files'
+          post 'update_files'
+          get 'server_time'
+          get 'download'
+          post 'zip_groupings_files'
+          get 'download_zipped_file'
+        end
+
+        member do
+          get 'collect_and_begin_grading'
+          post 'manually_collect_and_begin_grading'
+          get 'repo_browser'
+          post 'repo_browser'
+          get 'downloads'
+          get 'get_file'
+          get 'get_feedback_file'
+        end
+
+        resources :results do
+          collection do
+            get 'edit'
+            get 'download'
+          end
+
+          member do
+            get 'get_annotations'
+            get 'add_extra_marks'
+            get 'download'
+            post 'download'
+            get 'download_zip'
+            delete 'cancel_remark_request'
+            post 'add_extra_mark'
+            delete 'delete_grace_period_deduction'
+            get 'next_grouping'
+            post 'remove_extra_mark'
+            patch 'revert_to_automatic_deductions'
+            post 'set_released_to_students'
+            post 'update_overall_comment'
+            post 'toggle_marking_state'
+            patch 'update_remark_request'
+            get 'update_positions'
+            patch 'update_mark'
+            get 'view_marks'
+            post 'add_tag'
+            post 'remove_tag'
+            post 'run_tests'
+            get 'stop_test'
+            get 'get_test_runs_instructors'
+            get 'get_test_runs_instructors_released'
+          end
+        end
+      end
+
+      resources :results, only: [:edit], path: '/peer_reviews' do
+        collection do
           get 'download'
         end
 
         member do
-          get 'add_extra_marks'
-          get 'add_extra_mark'
-          get 'download'
-          post 'download'
-          get 'download_zip'
-          get 'cancel_remark_request'
-          get 'codeviewer'
-          post 'codeviewer'
-          get 'expand_criteria'
-          get 'collapse_criteria'
-          post 'add_extra_mark'
-          post 'delete_grace_period_deduction'
-          get 'next_grouping'
-          post 'remove_extra_mark'
-          get 'expand_unmarked_criteria'
-          post 'set_released_to_students'
-          put 'update_overall_comment'
-          post 'update_overall_remark_comment'
-          post 'update_marking_state'
-          get 'update_remark_request'
-          get 'update_positions'
-          post 'update_mark'
           get 'view_marks'
+          get 'next_grouping'
+          post 'toggle_marking_state'
+          patch 'update_mark'
+          post 'update_overall_comment'
+          patch 'update_remark_request'
+        end
+      end
+
+      resources :peer_reviews, only: :index do
+        collection do
+          get 'populate'
+          post 'assign_groups'
+          get 'peer_review_mapping'
+          post 'upload'
+          get 'list_reviews'
+          get 'show_reviews'
+        end
+
+        member do
+          get 'show_result'
+        end
+      end
+
+      resources :graders do
+        collection do
+          post 'upload'
+          get 'grader_groupings_mapping'
+          get 'grader_criteria_mapping'
+          get 'global_actions'
+          post 'global_actions'
+          get 'grader_summary'
+        end
+      end
+
+      resources :annotation_categories do
+        collection do
+          post 'update_positions'
+          post 'upload'
+          get 'download'
+          get 'new_annotation_text'
+          post 'create_annotation_text'
+          delete 'destroy_annotation_text'
+          put 'update_annotation_text'
+          get 'find_annotation_text'
+          get 'annotation_text_uses'
+          get 'uncategorized_annotations'
         end
       end
     end
 
-    resources :graders do
+    resources :grade_entry_forms do
       collection do
-        get 'add_grader_to_grouping'
-        post 'csv_upload_grader_groups_mapping'
-        post 'csv_upload_grader_criteria_mapping'
-        get 'download_grader_groupings_mapping'
-        get 'download_grader_criteria_mapping'
-        get 'download_dialog'
-        get 'download_grouplist'
-        get 'grader_criteria_dialog'
-        get 'global_actions'
-        get 'groups_coverage_dialog'
-        post 'populate_graders'
-        post 'populate'
-        post 'populate_criteria'
-        post 'set_assign_criteria'
-        get 'random_assign'
-        get 'upload_dialog'
-        get 'unassign'
-        post 'global_actions'
+        get 'student_interface'
       end
-    end
 
-    resources :annotation_categories do
       member do
-        get 'get_annotations'
-        delete 'delete_annotation_category'
-        delete 'delete_annotation_text'
-        get 'add_annotation_text'
-        post 'add_annotation_text'
-        put 'update_annotation'
-      end
-
-      collection do
-        get 'add_annotation_category'
-        post 'csv_upload'
-        get 'delete_annotation_category'
+        get 'populate_grades_table'
+        get 'get_mark_columns'
+        get 'view_summary'
+        get 'grades'
         get 'download'
-        post 'yml_upload'
-        post 'add_annotation_category'
-        post 'update_annotation_category'
-        get 'add_annotation_text'
-        post 'delete_annotation_text'
-        post 'update_annotation'
+        post 'upload'
+        post 'update_grade'
+        post 'update_grade_entry_students'
+        get 'student_interface'
       end
-    end
-  end
 
-  resources :grade_entry_forms do
-    collection do
-      get 'student_interface'
-    end
+      resources :marks_graders, only: [:index] do
+        collection do
+          post 'upload'
+          get 'grader_mapping'
+          post 'assign_all'
+          post 'unassign_all'
+          post 'unassign_single'
+          post 'randomly_assign'
+        end
+      end
 
-    member do
-      get 'grades'
-      get 'g_table_paginate'
-      post 'g_table_paginate'
-      get 'csv_download'
-      post 'csv_upload'
-      post 'update_grade'
-      post 'update_grade_entry_students'
-      get 'student_interface'
     end
 
-    resources :marks_graders do
+    resources :notes do
+
       collection do
-        get 'add_grader_to_grouping'
-        post 'csv_upload_grader_groups_mapping'
-        post 'csv_upload_grader_criteria_mapping'
-        get 'download_grader_students_mapping'
-        get 'download_grader_criteria_mapping'
-        get 'download_dialog'
-        get 'download_grouplist'
-        get 'grader_criteria_dialog'
-        get 'global_actions'
-        get 'groups_coverage_dialog'
-        post 'populate_graders'
-        post 'populate'
-        post 'populate_criteria'
-        post 'set_assign_criteria'
-        get 'random_assign'
-        get 'upload_dialog'
-        get 'unassign'
-        post 'global_actions'
+        post 'add_note'
+        post 'noteable_object_selector'
+        get 'new_update_groupings'
+        post 'new_update_groupings'
+        get 'notes_dialog'
+      end
+
+      member do
+        get 'student_interface'
+        post 'grades'
       end
     end
 
-  end
+    resources :key_pairs
 
-  resources :notes do
-
-    collection do
-      post 'add_note'
-      post 'noteable_object_selector'
-      get 'new_update_groupings'
-      post 'new_update_groupings'
+    resources :course_summaries do
+      collection do
+        get 'populate'
+        get 'get_marking_scheme_details'
+        get 'download_csv_grades_report'
+        get 'view_summary'
+      end
     end
 
+    resources :marking_schemes do
+      collection do
+        get 'populate'
+      end
+    end
+
+    resources :sections
+
+    resources :annotations do
+      collection do
+        post 'add_existing_annotation'
+      end
+    end
+
+    resources :students do
+      collection do
+        patch 'bulk_modify'
+        patch 'update_mailer_settings'
+        get 'manage'
+        get 'add_new_section'
+        get 'download'
+        post 'upload'
+        get 'mailer_settings'
+      end
+
+      member do
+        delete 'delete_grace_period_deduction'
+      end
+    end
+
+    resources :tas  do
+      collection do
+        get 'download'
+        post 'upload'
+      end
+      member do
+        get 'refresh_graph'
+      end
+    end
+
+    resources :main do
+      collection do
+        post 'logout'
+        get 'about'
+        post 'login_as'
+        get 'role_switch'
+        get 'clear_role_switch_session'
+        post 'reset_api_key'
+        get 'check_timeout'
+        post 'refresh_session'
+      end
+    end
+
+    resources :automated_tests do
+      member do
+        get 'student_interface'
+        post 'execute_test_run'
+      end
+    end
+
+    resources :extensions
+  end
+
+  resources :job_messages, param: :job_id do
     member do
-      get 'student_interface'
-      get 'notes_dialog'
-      post 'grades'
+      get 'get'
     end
   end
 
-  resources :sections
-
-  resources :annotations do
-    collection do
-      post 'add_existing_annotation'
-      put 'update_annotation'
-      post 'update_comment'
-      delete 'destroy'
-    end
-  end
-
-  resources :students do
-    collection do
-      post 'bulk_modify'
-      post 'populate'
-      get 'manage'
-      get 'add_new_section'
-      get 'download_student_list'
-      post 'upload_student_list'
-    end
-
-    member do
-      post 'delete_grace_period_deduction'
-    end
-  end
-
-  resources :tas  do
-    collection do
-      post 'populate'
-      post 'upload_ta_list'
-      get 'download_ta_list'
-    end
-  end
-
-  resources :main do
-    collection do
-      get 'logout'
-      get 'about'
-      post 'login_as'
-      get 'role_switch'
-      get 'redirect'
-      get 'clear_role_switch_session'
-      post 'reset_api_key'
-    end
-  end
-
-  match 'main', :controller => 'main', :action => 'index'
-  match 'main/about', :controller => 'main', :action => 'about'
-  match 'main/logout', :controller => 'main', :action => 'logout'
+  match 'main', controller: 'main', action: 'index', via: :post
+  match 'main/about', controller: 'main', action: 'about', via: :post
+  match 'main/logout', controller: 'main', action: 'logout', via: :post
 
   # Return a 404 when no route is match
-  match '*path', :controller => 'main', :action => 'page_not_found'
+  unless Rails.env.test?
+    match '*path', controller: 'main', action: 'page_not_found', via: :all
+  end
 end

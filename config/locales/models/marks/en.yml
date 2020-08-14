@@ -1,0 +1,6 @@
+en:
+  activerecord:
+    models:
+      mark:
+        one: "Mark"
+        other: "Marks"

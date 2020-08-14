@@ -1,0 +1,56 @@
+<p>
+  <%= "#{Assignment.human_attribute_name(:due_date)}: #{l(assignment.due_date)}" %>
+</p>
+
+<% if assignment.outstanding_remark_request_count && assignment.outstanding_remark_request_count > 0%>
+  <p>
+    <%= link_to t(:outstanding_remark_request,
+                  count: assignment.outstanding_remark_request_count),
+        browse_assignment_submissions_path(assignment, filter_by: 'marking_state', filter_value: 'remark') %>
+  </p>
+<% end %>
+
+<table>
+  <tr>
+    <td><%= t(:average) %></td>
+    <td>
+      <%= number_to_percentage(assignment.results_average || 0, precision: 1) %>
+    </td>
+  </tr>
+
+  <tr>
+    <td><%= t(:median) %></td>
+    <td>
+      <%= number_to_percentage(assignment.results_median || 0, precision: 1) %>
+    </td>
+  </tr>
+
+  <tr>
+    <td><%= t(:assignments_submitted) %></td>
+    <td>
+      <% num_submissions = assignment.current_submissions_used.size %>
+      <%= "#{num_submissions}/#{assignment.groupings.size}" %>
+    </td>
+  </tr>
+
+  <tr>
+    <td><%= t(:assignments_graded) %></td>
+    <td>
+      <%= "#{num_submissions - assignment.ungraded_submission_results.size}/#{assignment.groupings.size}" %>
+    </td>
+  </tr>
+
+  <tr>
+    <td><%= t(:num_failed) %></td>
+    <td>
+      <%= "#{assignment.results_fails || 0}" %>
+    </td>
+  </tr>
+
+  <tr>
+    <td><%= t(:num_zeros) %></td>
+    <td>
+      <%= "#{assignment.results_zeros || 0}" %>
+    </td>
+  </tr>
+</table>

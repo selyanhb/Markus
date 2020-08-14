@@ -1,156 +1,135 @@
-include CsvHelper
-require 'csv_invalid_line_error'
-class Assignment < ActiveRecord::Base
+require 'csv'
 
-  MARKING_SCHEME_TYPE = {
-    :flexible => 'flexible',
-    :rubric => 'rubric'
-  }
+# Represents an assignment where students submit work to be graded
+class Assignment < Assessment
 
-  has_many :rubric_criteria,
-           :class_name => 'RubricCriterion',
-           :order => :position
-  has_many :flexible_criteria,
-           :class_name => 'FlexibleCriterion',
-           :order => :position
-  has_many :assignment_files
-  has_many :test_files
-  has_many :criterion_ta_associations
-  has_one :submission_rule
-  has_one :assignment_stat
-  accepts_nested_attributes_for :submission_rule, :allow_destroy => true
-  accepts_nested_attributes_for :assignment_files, :allow_destroy => true
-  accepts_nested_attributes_for :test_files, :allow_destroy => true
-  accepts_nested_attributes_for :assignment_stat, :allow_destroy => true
+  MIN_PEER_REVIEWS_PER_GROUP = 1
 
-  has_many :annotation_categories
+  validates_presence_of :due_date
 
-  has_many :groupings
-  has_many :ta_memberships,
-           :class_name => 'TaMembership',
-           :through => :groupings
-  has_many :student_memberships, :through => :groupings
-  has_many :tokens, :through => :groupings
+  has_one :assignment_properties,
+          dependent: :destroy,
+          inverse_of: :assignment,
+          foreign_key: :assessment_id,
+          autosave: true
+  delegate_missing_to :assignment_properties
+  accepts_nested_attributes_for :assignment_properties, update_only: true
+  validates_presence_of :assignment_properties
+  after_initialize :create_associations
 
-  has_many :submissions, :through => :groupings
-  has_many :groups, :through => :groupings
+  # Add assignment_properties to default scope because we almost always want to load an assignment with its properties
+  default_scope { includes(:assignment_properties) }
 
-  has_many :notes, :as => :noteable, :dependent => :destroy
+  has_many :criteria,
+           -> { order(:position) },
+           dependent: :destroy,
+           inverse_of: :assignment,
+           foreign_key: :assessment_id
 
-  has_many :section_due_dates
-  accepts_nested_attributes_for :section_due_dates
+  has_many :ta_criteria,
+           -> { where(ta_visible: true).order(:position) },
+           class_name: 'Criterion',
+           foreign_key: :assessment_id
 
+  has_many :peer_criteria,
+           -> { where(peer_visible: true).order(:position) },
+           class_name: 'Criterion',
+           foreign_key: :assessment_id
+
+  has_many :test_groups, dependent: :destroy, inverse_of: :assignment, foreign_key: :assessment_id
+  accepts_nested_attributes_for :test_groups, allow_destroy: true, reject_if: ->(attrs) { attrs[:name].blank? }
+
+  has_many :annotation_categories,
+           -> { order(:position) },
+           class_name: 'AnnotationCategory',
+           dependent: :destroy, foreign_key: :assessment_id
+
+  has_many :criterion_ta_associations, dependent: :destroy, foreign_key: :assessment_id
+
+  has_many :assignment_files, dependent: :destroy, inverse_of: :assignment, foreign_key: :assessment_id
+  accepts_nested_attributes_for :assignment_files, allow_destroy: true
   validates_associated :assignment_files
 
-  validates_presence_of :repository_folder
-  validates_presence_of :short_identifier, :group_min
-  validates_uniqueness_of :short_identifier, :case_sensitive => true
+  # this has to be before :peer_reviews or it throws a HasManyThroughOrderError
+  has_many :groupings, foreign_key: :assessment_id
+  # Assignments can now refer to themselves, where this is null if there
+  # is no parent (the same holds for the child peer reviews)
+  belongs_to :parent_assignment,
+             class_name: 'Assignment', optional: true, inverse_of: :pr_assignment, foreign_key: :parent_assessment_id
+  has_one :pr_assignment, class_name: 'Assignment', foreign_key: :parent_assessment_id, inverse_of: :parent_assignment
+  has_many :peer_reviews, through: :groupings
+  has_many :pr_peer_reviews, through: :parent_assignment, source: :peer_reviews
 
-  validates_numericality_of :group_min,
-                            :only_integer => true,
-                            :greater_than => 0
-  validates_numericality_of :group_max, :only_integer => true
-  validates_numericality_of :tokens_per_day,
-                            :only_integer => true,
-                            :greater_than_or_equal_to => 0
+  has_many :current_submissions_used, through: :groupings,
+           source: :current_submission_used
 
-  validates_associated :submission_rule
-  validates_associated :assignment_stat
-  validates_presence_of :submission_rule
+  has_many :ta_memberships, through: :groupings
+  has_many :student_memberships, through: :groupings
 
-  validates_presence_of :marking_scheme_type
+  has_many :submissions, through: :groupings
+  has_many :groups, through: :groupings
 
-  # For those, please refer to issue #1126
-  # Because of app/views/assignments/_list_manage.html.erb line:13
-  validates :description, :presence => true
-  # Because of app/views/main/_grade_distribution_graph.html.erb:25
-  validates :assignment_stat, :presence => true
+  has_many :notes, as: :noteable, dependent: :destroy
 
-  # since allow_web_submits is a boolean, validates_presence_of does not work:
-  # see the Rails API documentation for validates_presence_of (Model
-  # validations)
-  validates_inclusion_of :allow_web_submits, :in => [true, false]
-  validates_inclusion_of :display_grader_names_to_students, :in => [true, false]
-  validates_inclusion_of :enable_test, :in => [true, false]
-  validates_inclusion_of :assign_graders_to_criteria, :in => [true, false]
+  has_many :section_due_dates, inverse_of: :assignment, foreign_key: :assessment_id
+  accepts_nested_attributes_for :section_due_dates
+
+  has_many :exam_templates, dependent: :destroy, inverse_of: :assignment, foreign_key: :assessment_id
+
+  has_many :starter_file_groups, dependent: :destroy, inverse_of: :assignment, foreign_key: :assessment_id
+
+  after_create :create_autotest_dirs
 
   before_save :reset_collection_time
-  validate :minimum_number_of_groups
-  # Call custom validator in order to validate the :due_date attribute
-  # :date => true maps to DateValidator (:custom_name => true maps to CustomNameValidator)
-  # Look in lib/validators/* for more info
-  validates :due_date, :date => true
+  after_save :update_permissions_if_vcs_changed
+
   after_save :update_assigned_tokens
+  after_save :create_peer_review_assignment_if_not_exist
 
-  # Set the default order of assignments: in ascending order of due_date
-  default_scope order('due_date ASC')
+  has_one :submission_rule, dependent: :destroy, inverse_of: :assignment, foreign_key: :assessment_id
+  accepts_nested_attributes_for :submission_rule, allow_destroy: true
+  validates_associated :submission_rule
+  validates_presence_of :submission_rule
 
-  # Export a YAML formatted string created from the assignment rubric criteria.
-  def export_rubric_criteria_yml
-    criteria = self.rubric_criteria
-    final = ActiveSupport::OrderedHash.new
-    criteria.each do |criterion|
-      inner = ActiveSupport::OrderedHash.new
-      inner['weight'] =  criterion['weight']
-      inner['level_0'] = {
-        'name' =>  criterion['level_0_name'] ,
-        'description' =>  criterion['level_0_description']
-      }
-      inner['level_1'] = {
-        'name' =>  criterion['level_1_name'] ,
-        'description' =>  criterion['level_1_description']
-      }
-      inner['level_2'] = {
-        'name' =>  criterion['level_2_name'] ,
-        'description' =>  criterion['level_2_description']
-      }
-      inner['level_3'] = {
-        'name' =>  criterion['level_3_name'] ,
-        'description' =>  criterion['level_3_description']
-      }
-      inner['level_4'] = {
-        'name' =>  criterion['level_4_name'] ,
-        'description' => criterion['level_4_description']
-      }
-      criteria_yml = {"#{criterion['rubric_criterion_name']}" => inner}
-      final = final.merge(criteria_yml)
-    end
-    final.to_yaml
-  end
+  has_one :assignment_stat, dependent: :destroy, inverse_of: :assignment, foreign_key: :assessment_id
+  accepts_nested_attributes_for :assignment_stat, allow_destroy: true
+  validates_associated :assignment_stat
+  # Because of app/views/main/_grade_distribution_graph.html.erb:25
+  validates_presence_of :assignment_stat
 
-  def minimum_number_of_groups
-    if (group_max && group_min) && group_max < group_min
-      errors.add(:group_max, 'must be greater than the minimum number of groups')
-      false
-    end
-  end
+  BLANK_MARK = ''
 
-  # Are we past all the due dates for this assignment?
-  def past_due_date?
+  # Copy of API::AssignmentController without selected attributes and order changed
+  # to put first the 4 required fields
+  DEFAULT_FIELDS = [:short_identifier, :description,
+                    :due_date, :message, :group_min, :group_max, :tokens_per_period,
+                    :allow_web_submits, :student_form_groups, :remark_due_date,
+                    :remark_message, :assign_graders_to_criteria, :enable_test,
+                    :enable_student_tests, :allow_remarks,
+                    :display_grader_names_to_students,
+                    :display_median_to_students, :group_name_autogenerated,
+                    :is_hidden, :vcs_submit, :has_peer_review]
+
+  # Set the default order of assignments: in ascending order of date (due_date)
+  default_scope { order(:due_date, :id) }
+
+  # Are we past all due_dates and section due_dates for this assignment?
+  # This does not take extensions into consideration.
+  def past_all_due_dates?
     # If no section due dates /!\ do not check empty? it could be wrong
-    unless self.section_due_dates_type
-      return !due_date.nil? && Time.zone.now > due_date
-    end
+    return false if !due_date.nil? && Time.zone.now < due_date
+    return false if section_due_dates.any? { |sec| !sec.due_date.nil? && Time.zone.now < sec.due_date }
 
-    # If section due dates
-    self.section_due_dates.each do |d|
-      if !d.due_date.nil? && Time.zone.now > d.due_date
-        return true
-      end
-    end
-    false
+    true
   end
 
   # Return an array with names of sections past
-  def what_past_due_date
-    sections_past = []
-
-    unless self.section_due_dates_type
-      if !due_date.nil? && Time.zone.now > due_date
-        return sections_past << 'Due Date'
-      end
+  def section_names_past_due_date
+    if !self.section_due_dates_type && !due_date.nil? && Time.zone.now > due_date
+      return []
     end
 
+    sections_past = []
     self.section_due_dates.each do |d|
       if !d.due_date.nil? && Time.zone.now > d.due_date
         sections_past << d.section.name
@@ -160,79 +139,106 @@ class Assignment < ActiveRecord::Base
     sections_past
   end
 
-  # Are we past the due date for this assignment, for this grouping ?
-  def section_past_due_date?(grouping)
-    if self.section_due_dates_type and !grouping.inviter.section.nil?
-        section_due_date =
-    SectionDueDate.due_date_for(grouping.inviter.section, self)
-        !section_due_date.nil? && Time.zone.now > section_due_date
-    else
-      self.past_due_date?
-    end
+  def upcoming(current_user)
+    grouping = current_user.accepted_grouping_for(self.id)
+    due_date = grouping&.collection_date
+    return !past_collection_date?(current_user.section) if due_date.nil?
+    due_date > Time.current
   end
 
-  # return the due date for a section
+  # Whether or not this grouping is past its due date for this assignment.
+  def grouping_past_due_date?(grouping)
+    return past_all_due_dates? if grouping.nil?
+
+    date = grouping.due_date
+    !date.nil? && Time.zone.now > date
+  end
+
   def section_due_date(section)
-    if self.section_due_dates_type
-      unless section.nil?
-        return SectionDueDate.due_date_for(section, self)
-      end
+    unless section_due_dates_type && section
+      return due_date
     end
-    self.due_date
+
+    SectionDueDate.due_date_for(section, self)
   end
 
-  # Calculate the latest due date. Used to calculate the collection time
+  # Return the start_time for +section+ if it is not nil, otherwise return this
+  # assignments start_time instead.
+  def section_start_time(section)
+    return start_time unless section_due_dates_type
+
+    section&.section_due_dates&.find_by(assignment: self)&.start_time || start_time
+  end
+
+  # Calculate the latest due date among all sections for the assignment.
   def latest_due_date
-    if self.section_due_dates_type
-      due_date = self.due_date
-      self.section_due_dates.each do |d|
-        if !d.due_date.nil? && due_date < d.due_date
-          due_date = d.due_date
-        end
-      end
-      due_date
-    else
-      self.due_date
-    end
+    return due_date unless section_due_dates_type
+    due_dates = section_due_dates.map(&:due_date) << due_date
+    due_dates.compact.max
   end
 
-  def past_collection_date?
-    Time.zone.now > submission_rule.calculate_collection_time
+  # Return collection date for all groupings as a hash mapping grouping_id to collection date.
+  def all_grouping_collection_dates
+    submission_rule_hours = submission_rule.periods.pluck('periods.hours').sum.hours
+    no_penalty = Set.new(groupings.joins(:extension).where('extensions.apply_penalty': false).pluck(:id))
+    collection_dates = Hash.new { |h, k| h[k] = due_date + submission_rule_hours }
+    all_grouping_due_dates.each do |grouping_id, grouping_due_date|
+      if no_penalty.include? grouping_id
+        collection_dates[grouping_id] = grouping_due_date
+      else
+        collection_dates[grouping_id] = grouping_due_date + submission_rule_hours
+      end
+    end
+    collection_dates
+  end
+
+  # Return due date for all groupings as a hash mapping grouping_id to due date.
+  def all_grouping_due_dates
+    section_due_dates = groupings.joins(inviter: [section: :section_due_dates])
+                                 .where('section_due_dates.assessment_id': id)
+                                 .pluck('groupings.id', 'section_due_dates.due_date')
+
+    grouping_extensions = groupings.joins(:extension)
+                                   .pluck(:id, :time_delta)
+
+    due_dates = Hash.new { |h, k| h[k] = due_date }
+    section_due_dates.each do |grouping_id, sec_due_date|
+      due_dates[grouping_id] = sec_due_date unless sec_due_date.nil?
+    end
+    grouping_extensions.each do |grouping_id, ext|
+      due_dates[grouping_id] += ActiveSupport::Duration.parse(ext)
+    end
+    due_dates
+  end
+
+  # checks if the due date for +section+ has passed for this assignment
+  # or if the main due date has passed if +section+ is nil.
+  def past_collection_date?(section = nil)
+    Time.zone.now > submission_rule.calculate_collection_time(section)
+  end
+
+  def past_all_collection_dates?
+    if section_due_dates_type && Section.any?
+      Section.all.all? do |s|
+        past_collection_date? s
+      end
+    else
+      past_collection_date?
+    end
   end
 
   def past_remark_due_date?
     !remark_due_date.nil? && Time.zone.now > remark_due_date
   end
 
-  # Returns a Submission instance for this user depending on whether this
-  # assignment is a group or individual assignment
-  def submission_by(user) #FIXME: needs schema updates
-
-    # submission owner is either an individual (user) or a group
-    owner = self.group_assignment? ? self.group_by(user.id) : user
-    return nil unless owner
-
-    # create a new submission for the owner
-    # linked to this assignment, if it doesn't exist yet
-
-    # submission = owner.submissions.find_or_initialize_by_assignment_id(id)
-    # submission.save if submission.new_record?
-    # return submission
-
-    assignment_groupings = user.active_groupings.delete_if {|grouping|
-      grouping.assignment.id != self.id
-    }
-
-    if assignment_groupings.empty?
-      nil
-    else
-      assignment_groupings.first.submissions.first
-    end
-  end
-
   # Return true if this is a group assignment; false otherwise
   def group_assignment?
-    invalid_override || group_min != 1 || group_max > 1
+    invalid_override || group_max > 1
+  end
+
+  # Return all released marks for this assignment
+  def released_marks
+    submissions.joins(:results).where(results: { released_to_students: true })
   end
 
   # Returns the group by the user for this assignment. If pending=true,
@@ -240,161 +246,169 @@ class Assignment < ActiveRecord::Base
   # Returns nil if user does not have a group for this assignment, or if it is
   # not a group assignment
   def group_by(uid, pending=false)
-    return nil unless group_assignment?
+    return unless group_assignment?
 
     # condition = "memberships.user_id = ?"
     # condition += " and memberships.status != 'rejected'"
     # add non-pending status clause to condition
     # condition += " and memberships.status != 'pending'" unless pending
-    # groupings.first(:include => :memberships, :conditions => [condition, uid]) #FIXME: needs schema update
+    # groupings.first(include: :memberships, conditions: [condition, uid]) #FIXME: needs schema update
 
     #FIXME: needs to be rewritten using a proper query...
-    User.find(uid).accepted_grouping_for(self.id)
-  end
-
-  # Make a list of students without any groupings
-  def no_grouping_students_list
-   @students = Student.all(:order => :last_name, :conditions => {:hidden => false})
-   @students_list = []
-   @students.each do |s|
-     unless s.has_accepted_grouping_for?(self.id)
-       @students_list.push(s)
-      end
-   end
-   @students_list
+    User.find(uid.id).accepted_grouping_for(id)
   end
 
   def display_for_note
     short_identifier
   end
 
-  def total_mark
-    total = 0
-    if self.marking_scheme_type == 'rubric'
-      rubric_criteria.each do |criterion|
-        total = total + criterion.weight * 4
-      end
-    else
-      total = flexible_criteria.sum('max')
-    end
-    total
+  # Returns the maximum possible mark for a particular assignment
+  def max_mark(user_visibility = :ta_visible)
+    criteria.where(user_visibility => true).sum(:max_mark).round(2)
+  end
+
+  # Returns a boolean indicating whether marking has started for at least
+  # one submission for this assignment.  Only the most recently collected
+  # submissions are considered.
+  def marking_started?
+    Result.joins(:marks, submission: :grouping)
+          .where(groupings: { assessment_id: id },
+                 submissions: { submission_version_used: true })
+          .where.not(marks: { mark: nil })
+          .any?
   end
 
   # calculates summary statistics of released results for this assignment
-  def set_results_statistics
-    groupings = Grouping.find_all_by_assignment_id(self.id)
-    results = Array.new
-    results_count = 0
-    results_sum = 0
-    results_fails = 0
-    results_zeros = 0
-    students_count = 0
-    groupings.each do |grouping|
-      submission = grouping.current_submission_used
-      unless submission.nil?
-        result = submission.get_latest_result
-        if result.released_to_students
-          results.push result.total_mark
-          results_sum += result.total_mark * grouping.student_membership_number
-          results_count += 1
-          students_count += grouping.student_membership_number
-          if result.total_mark < (self.total_mark / 2)
-            results_fails += 1
-          end
-          if result.total_mark == 0
-            results_zeros += 1
-          end
-        end
-      end
-    end
-    if results_count == 0
-      return false # no marks released for this assignment
-    end
-    self.results_fails = results_fails
-    self.results_zeros = results_zeros
-    results_sorted = results.sort
-    median_quantity = 0
-    if (results_count % 2) == 0
-       median_quantity = (results_sorted[results_count/2 - 1]
-                        + results_sorted[results_count/2]).to_f / 2
-    else
-       median_quantity = results_sorted[results_count/2]
-    end
-    self.results_median = (median_quantity * 100 / self.total_mark)
-    # Need to avoid divide by zero
-    if results_sum == 0
+  def update_results_stats
+    marks = Result.student_marks_by_assignment(id)
+    # No marks released for this assignment.
+    return false if marks.empty?
+
+    self.results_fails = marks.count { |mark| mark < max_mark / 2.0 }
+    self.results_zeros = marks.count(&:zero?)
+
+    # Avoid division by 0.
+    if max_mark.zero?
       self.results_average = 0
-      return self.save
+      self.results_median = 0
+    else
+      self.results_average = (DescriptiveStatistics.mean(marks) * 100 / max_mark).round(2)
+      self.results_median = (DescriptiveStatistics.median(marks) * 100 / max_mark).round(2)
     end
-    avg_quantity = results_sum / students_count
-    # compute average in percent
-    self.results_average = (avg_quantity * 100 / self.total_mark)
     self.save
+  end
+
+  def self.get_current_assignment
+    # start showing (or "featuring") the assignment 3 days before it's due
+    # query uses Date.today + 4 because results from db seems to be off by 1
+    current_assignment = Assignment.where('due_date <= ?', Date.today + 4)
+                                   .reorder('due_date DESC').first
+
+    if current_assignment.nil?
+      current_assignment = Assignment.reorder('due_date ASC').first
+    end
+
+    current_assignment
   end
 
   def update_remark_request_count
-    outstanding_count = 0
-    groupings.each do |grouping|
-      submission = grouping.current_submission_used
-      if !submission.nil? && submission.has_remark?
-        if submission.get_remark_result.marking_state ==
-            Result::MARKING_STATES[:partial]
-          outstanding_count += 1
-        end
-      end
-    end
-    self.outstanding_remark_request_count = outstanding_count
+    self.outstanding_remark_request_count = groupings.joins(current_submission_used: :submitted_remark)
+                                                     .where('results.marking_state': :incomplete)
+                                                     .count
     self.save
   end
 
-  def total_criteria_weight
-    factor = 10.0 ** 2
-    (rubric_criteria.sum('weight') * factor).floor / factor
+  def all_grouping_data
+    student_data = Student.all.pluck_to_hash(:id, :user_name, :first_name, :last_name, :hidden)
+    students = Hash[student_data.map do |s|
+      [s[:user_name], s.merge(_id: s[:id], assigned: false)]
+    end
+    ]
+
+    grouping_data = self
+                    .groupings
+                    .joins(:group)
+                    .left_outer_joins(:extension)
+                    .left_outer_joins(non_rejected_student_memberships: :user)
+                    .left_outer_joins(inviter: :section)
+                    .pluck_to_hash('groupings.id',
+                                   'groupings.admin_approved',
+                                   'groups.group_name',
+                                   'users.user_name',
+                                   'memberships.membership_status',
+                                   'sections.name',
+                                   'extensions.id',
+                                   'extensions.time_delta',
+                                   'extensions.apply_penalty',
+                                   'extensions.note')
+
+    members = Hash.new { |h, k| h[k] = [] }
+    grouping_data.each do |data|
+      if data['users.user_name']
+        members[data['groupings.id']] << [data['users.user_name'], data['memberships.membership_status']]
+        students[data['users.user_name']][:assigned] = true
+      end
+    end
+    ids = Set.new
+    groupings = grouping_data.map do |data|
+      next if ids.include? data['groupings.id'] # distinct on the query doesn't seem to work
+
+      ids << data['groupings.id']
+      if data['extensions.time_delta'].nil?
+        extension_data = {}
+      else
+        duration = ActiveSupport::Duration.parse(data['extensions.time_delta'])
+        if assignment.is_timed
+          extension_data = AssignmentProperties.duration_parts duration
+        else
+          extension_data = Extension.to_parts duration
+        end
+      end
+      extension_data[:note] = data['extensions.note'] || ''
+      extension_data[:apply_penalty] = data['extensions.apply_penalty'] || false
+      extension_data[:id] = data['extensions.id']
+      extension_data[:grouping_id] = data['groupings.id']
+      {
+        _id: data['groupings.id'],
+        admin_approved: data['groupings.admin_approved'],
+        group_name: data['groups.group_name'],
+        extension: extension_data,
+        members: members[data['groupings.id']],
+        section: data['sections.name'] || ''
+      }
+    end.compact
+
+    {
+      students: students.values,
+      groups: groupings
+    }
   end
 
   def add_group(new_group_name=nil)
-    if self.group_name_autogenerated
+    if group_name_autogenerated
       group = Group.new
-      group.save(:validate => false)
+      group.save(validate: false)
       group.group_name = group.get_autogenerated_group_name
       group.save
     else
-      return nil if new_group_name.nil?
-      if Group.first(:conditions => {:group_name => new_group_name})
-        group = Group.first(:conditions => {:group_name => new_group_name})
-        unless self.groupings.find_by_group_id(group.id).nil?
+      return if new_group_name.nil?
+      if group = Group.where(group_name: new_group_name).first
+        unless groupings.where(group_id: group.id).first.nil?
           raise "Group #{new_group_name} already exists"
         end
       else
-        group = Group.new
-        group.group_name = new_group_name
-        group.save
+        group = Group.create(group_name: new_group_name)
       end
     end
-    grouping = Grouping.new
-    grouping.group = group
-    grouping.assignment = self
-    grouping.save
-    grouping
+    Grouping.create(group: group, assignment: self)
   end
 
-
-  # Create all the groupings for an assignment where students don't work
-  # in groups.
-  def create_groupings_when_students_work_alone
-     @students = Student.all
-     for student in @students do
-       unless student.has_accepted_grouping_for?(self.id)
-        student.create_group_for_working_alone_student(self.id)
-       end
-     end
-  end
-
-  # Clones the Groupings from the assignment with id assignment_id
+  # Clones the Groupings from the assignment with id assessment_id
   # into self.  Destroys any previously existing Groupings associated
   # with this Assignment
-  def clone_groupings_from(assignment_id)
-    original_assignment = Assignment.find(assignment_id)
+  def clone_groupings_from(assessment_id)
+    warnings = []
+    original_assignment = Assignment.find(assessment_id)
     self.transaction do
       self.group_min = original_assignment.group_min
       self.group_max = original_assignment.group_max
@@ -402,145 +416,57 @@ class Assignment < ActiveRecord::Base
       self.group_name_autogenerated = original_assignment.group_name_autogenerated
       self.group_name_displayed = original_assignment.group_name_displayed
       self.groupings.destroy_all
+      self.assignment_properties.save
       self.save
       self.reload
       original_assignment.groupings.each do |g|
-        unhidden_student_memberships = g.accepted_student_memberships.select do |m|
-          !m.user.hidden
+        active_student_memberships = g.accepted_student_memberships.select { |m| !m.user.hidden }
+        if active_student_memberships.empty?
+          warnings << I18n.t('groups.clone_warning.no_active_students', group: g.group.group_name)
+          next
         end
-        unhidden_ta_memberships = g.ta_memberships.select do |m|
-          !m.user.hidden
+        active_ta_memberships = g.ta_memberships.select { |m| !m.user.hidden }
+        grouping = Grouping.new
+        grouping.group_id = g.group_id
+        grouping.assessment_id = self.id
+        grouping.admin_approved = g.admin_approved
+        unless grouping.save
+          warnings << I18n.t('groups.clone_warning.other',
+                             group: g.group.group_name, error: grouping.errors.messages)
+          next
         end
-        #create the memberships for any user that is not hidden
-        unless unhidden_student_memberships.empty?
-          #create the groupings
-          grouping = Grouping.new
-          grouping.group_id = g.group_id
-          grouping.assignment_id = self.id
-          grouping.admin_approved = g.admin_approved
-          raise 'Could not save grouping' if !grouping.save
-          all_memberships = unhidden_student_memberships + unhidden_ta_memberships
+        all_memberships = active_student_memberships + active_ta_memberships
+        Repository.get_class.update_permissions_after(only_on_request: true) do
           all_memberships.each do |m|
             membership = Membership.new
             membership.user_id = m.user_id
             membership.type = m.type
             membership.membership_status = m.membership_status
-            raise 'Could not save membership' if !(grouping.memberships << membership)
+            unless grouping.memberships << membership # this saves the membership as a side effect, i.e. can return false
+              grouping.memberships.delete(membership)
+              warnings << I18n.t('groups.clone_warning.no_member',
+                                 member: m.user.user_name, group: g.group.group_name, error: membership.errors.messages)
+            end
           end
-          # Ensure all student members have permissions on their group repositories
-          grouping.update_repository_permissions
         end
       end
     end
-  end
 
-  # Add a group and corresponding grouping as provided in
-  # the passed in Array.
-  # Format: [ groupname, repo_name, member, member, etc ]
-  # Any member names that do not exist in the database will simply be ignored
-  # (This makes it possible to have empty groups created from a bad csv row)
-  def add_csv_group(row)
-    return if row.length == 0
-
-    # Note: We cannot use find_or_create_by here, because it has its own
-    # save semantics. We need to set and save attributes in a very particular
-    # order, so that everything works the way we want it to.
-    group = Group.find_by_group_name(row[0])
-    if group.nil?
-      group = Group.new
-      group.group_name = row[0]
-    end
-
-    # Since repo_name of "group" will be set before the first save call, the
-    # set repo_name will be used instead of the autogenerated name. See
-    # set_repo_name and build_repository in the groups model. Also, see
-    # create_group_for_working_alone_student in the students model for
-    # similar semantics.
-    if is_candidate_for_setting_custom_repo_name?(row)
-      # Do this only if user_name exists and is a student.
-      if Student.find_by_user_name(row[2])
-        group.repo_name = row[0]
-      else
-        # Student name does not exist, use provided repo_name
-        group.repo_name = row[1].strip # remove whitespace
-      end
-    end
-
-    # If we are not repository admin, set the repository name as provided
-    # in the csv upload file
-    unless group.repository_admin?
-      group.repo_name = row[1].strip # remove whitespace
-    end
-    # Note: after_create hook build_repository might raise
-    # Repository::RepositoryCollision. If it does, it adds the colliding
-    # repo_name to errors.on_base. This is how we can detect repo
-    # collisions here. Unfortunately, we can't raise an exception
-    # here, because we still want the grouping to be created. This really
-    # shouldn't happen anyway, because the lookup earlier should prevent
-    # repo collisions e.g. when uploading the same CSV file twice.
-    group.save
-    unless group.errors[:base].blank?
-      collision_error = I18n.t('csv.repo_collision_warning',
-                          { :repo_name => group.errors.on_base,
-                            :group_name => row[0] })
-    end
-
-    # Create a new Grouping for this assignment and the newly
-    # crafted group
-    grouping = Grouping.new(:assignment => self, :group => group)
-    grouping.save
-
-    # Form groups
-    start_index_group_members = 2 # first field is the group-name, second the repo name, so start at field 3
-    (start_index_group_members..(row.length - 1)).each do |i|
-      student = Student.find_by_user_name(row[i].strip) # remove whitespace
-      if student
-        if grouping.student_membership_number == 0
-          # Add first valid member as inviter to group.
-          grouping.group_id = group.id
-          grouping.save # grouping has to be saved, before we can add members
-          grouping.add_member(student, StudentMembership::STATUSES[:inviter])
-        else
-          grouping.add_member(student)
-        end
-      end
-
-    end
-    collision_error
-  end
-
-  # Updates repository permissions for all groupings of
-  # an assignment. This is a handy method, if for example grouping
-  # creation/deletion gets rolled back. The rollback does not
-  # reestablish proper repository permissions.
-  def update_repository_permissions_forall_groupings
-    # IMPORTANT: need to reload from DB
-    self.reload
-    groupings.each do |grouping|
-      grouping.update_repository_permissions
-    end
+    warnings
   end
 
   def grouped_students
-    result_students = []
-    student_memberships.each do |student_membership|
-      result_students.push(student_membership.user)
-    end
-    result_students
+    student_memberships.map(&:user)
   end
 
   def ungrouped_students
-    Student.all(:conditions => {:hidden => false}) - grouped_students
+    Student.where(hidden: false) - grouped_students
   end
 
   def valid_groupings
-    result = []
-    groupings.all(:include => [{:student_memberships => :user}]).each do |grouping|
-      if grouping.admin_approved || grouping.student_memberships.count >= group_min
-        result.push(grouping)
-      end
+    groupings.includes(student_memberships: :user).select do |grouping|
+      grouping.is_valid?
     end
-    result
   end
 
   def invalid_groupings
@@ -548,277 +474,759 @@ class Assignment < ActiveRecord::Base
   end
 
   def assigned_groupings
-    groupings.all(:joins => :ta_memberships, :include => [{:ta_memberships => :user}]).uniq
+    groupings.joins(:ta_memberships).includes(ta_memberships: :user).uniq
   end
 
   def unassigned_groupings
     groupings - assigned_groupings
   end
 
-  # Get a list of subversion client commands to be used for scripting
-  def get_svn_export_commands
-    svn_commands = [] # the commands to be exported
-
-    self.groupings.each do |grouping|
+  # Get a list of repo checkout client commands to be used for scripting
+  def get_repo_checkout_commands(ssh_url: false)
+    self.groupings.includes(:group, :current_submission_used).map do |grouping|
       submission = grouping.current_submission_used
-      if submission
-        svn_commands.push("svn export -r #{submission.revision_number} #{grouping.group.repository_external_access_url}/#{self.repository_folder} \"#{grouping.group.group_name}\"")
-      end
-    end
-    svn_commands
+      next if submission&.revision_identifier.nil?
+      url = ssh_url ? grouping.group.repository_ssh_access_url : grouping.group.repository_external_access_url
+      Repository.get_class.get_checkout_command(url,
+                                                submission.revision_identifier,
+                                                grouping.group.group_name, repository_folder)
+    end.compact
   end
 
   # Get a list of group_name, repo-url pairs
-  def get_svn_repo_list
-    CsvHelper::Csv.generate do |csv|
-      self.groupings.each do |grouping|
+  def get_repo_list
+    CSV.generate do |csv|
+      self.groupings.includes(:group).each do |grouping|
         group = grouping.group
-        csv << [group.group_name,group.repository_external_access_url]
+        csv << [group.group_name, group.repository_external_access_url, group.repository_ssh_access_url]
       end
     end
   end
 
-  # Get a simple CSV report of marks for this assignment
-  def get_simple_csv_report
-    students = Student.all
-    out_of = self.total_mark
-    CsvHelper::Csv.generate do |csv|
-       students.each do |student|
-         final_result = []
-         final_result.push(student.user_name)
-         grouping = student.accepted_grouping_for(self.id)
-         if grouping.nil? || !grouping.has_submission?
-           final_result.push('')
-         else
-           submission = grouping.current_submission_used
-           final_result.push(submission.get_latest_result.total_mark / out_of * 100)
-         end
-         csv << final_result
-       end
-    end
-  end
+  # Generate JSON summary of grades for this assignment
+  # for the current user. The user should be an admin or TA.
+  def summary_json(user)
+    return {} unless user.admin? || user.ta?
 
-  # Get a detailed CSV report of marks (includes each criterion)
-  # for this assignment. Produces slightly different reports, depending
-  # on which criteria type has been used the this assignment.
-  def get_detailed_csv_report
-    # which marking scheme do we have?
-    if self.marking_scheme_type == MARKING_SCHEME_TYPE[:flexible]
-      get_detailed_csv_report_flexible
+    if user.admin?
+      groupings = self.groupings
+      graders = groupings.joins(:tas)
+                         .pluck_to_hash(:id, 'users.user_name', 'users.first_name', 'users.last_name')
+                         .group_by { |x| x[:id] }
+      assigned_criteria = nil
     else
-      # default to rubric
-      get_detailed_csv_report_rubric
-    end
-  end
-
-  # Get a detailed CSV report of rubric based marks
-  # (includes each criterion) for this assignment.
-  # Produces CSV rows such as the following:
-  #   student_name,95.22222,3,4,2,5,5,4,0/2
-  # Criterion values should be read in pairs. I.e. 2,3 means
-  # a student scored 2 for a criterion with weight 3.
-  # Last column are grace-credits.
-  def get_detailed_csv_report_rubric
-    out_of = self.total_mark
-    students = Student.all
-    rubric_criteria = self.rubric_criteria
-    CsvHelper::Csv.generate do |csv|
-      students.each do |student|
-        final_result = []
-        final_result.push(student.user_name)
-        grouping = student.accepted_grouping_for(self.id)
-        if grouping.nil? || !grouping.has_submission?
-          # No grouping/no submission
-          final_result.push('')                         # total percentage
-          rubric_criteria.each do |rubric_criterion|
-            final_result.push('')                       # mark
-            final_result.push(rubric_criterion.weight)  # weight
-          end
-          final_result.push('')                         # extra-mark
-          final_result.push('')                         # extra-percentage
-        else
-          submission = grouping.current_submission_used
-          final_result.push(submission.get_latest_result.total_mark / out_of * 100)
-          rubric_criteria.each do |rubric_criterion|
-            mark = submission.get_latest_result.marks.find_by_markable_id_and_markable_type(rubric_criterion.id, 'RubricCriterion')
-            if mark.nil?
-              final_result.push('')
-            else
-              final_result.push(mark.mark || '')
-            end
-            final_result.push(rubric_criterion.weight)
-          end
-          final_result.push(submission.get_latest_result.get_total_extra_points)
-          final_result.push(submission.get_latest_result.get_total_extra_percentage)
-        end
-        # push grace credits info
-        grace_credits_data = student.remaining_grace_credits.to_s + '/' + student.grace_credits.to_s
-        final_result.push(grace_credits_data)
-
-        csv << final_result
+      groupings = self.groupings
+                      .joins(:memberships)
+                      .where('memberships.user_id': user.id)
+      graders = {}
+      if self.assign_graders_to_criteria
+        assigned_criteria = user.criterion_ta_associations
+                                .where(assessment_id: self.id)
+                                .pluck(:criterion_id)
+      else
+        assigned_criteria = nil
       end
     end
-  end
 
-  # Get a detailed CSV report of flexible criteria based marks
-  # (includes each criterion, with it's out-of value) for this assignment.
-  # Produces CSV rows such as the following:
-  #   student_name,95.22222,3,4,2,5,5,4,0/2
-  # Criterion values should be read in pairs. I.e. 2,3 means 2 out-of 3.
-  # Last column are grace-credits.
-  def get_detailed_csv_report_flexible
-    out_of = self.total_mark
-    students = Student.all
-    flexible_criteria = self.flexible_criteria
-    CsvHelper::Csv.generate do |csv|
-      students.each do |student|
-        final_result = []
-        final_result.push(student.user_name)
-        grouping = student.accepted_grouping_for(self.id)
-        if grouping.nil? || !grouping.has_submission?
-          # No grouping/no submission
-          final_result.push('')                 # total percentage
-          flexible_criteria.each do |criterion| ##  empty criteria
-            final_result.push('')               # mark
-            final_result.push(criterion.max)    # out-of
-          end
-          final_result.push('')                 # extra-marks
-          final_result.push('')                 # extra-percentage
-        else
-          # Fill in actual values, since we have a grouping
-          # and a submission.
-          submission = grouping.current_submission_used
-          final_result.push(submission.get_latest_result.total_mark / out_of * 100)
-          flexible_criteria.each do |criterion|
-            mark = submission.get_latest_result.marks.find_by_markable_id_and_markable_type(criterion.id, 'FlexibleCriterion')
-            if mark.nil?
-              final_result.push('')
-            else
-              final_result.push(mark.mark || '')
-            end
-            final_result.push(criterion.max)
-          end
-          final_result.push(submission.get_latest_result.get_total_extra_points)
-          final_result.push(submission.get_latest_result.get_total_extra_percentage)
-        end
-        # push grace credits info
-        grace_credits_data = student.remaining_grace_credits.to_s + '/' + student.grace_credits.to_s
-        final_result.push(grace_credits_data)
+    grouping_data = groupings.joins(:group)
+                             .left_outer_joins(inviter: :section)
+                             .pluck_to_hash(:id, 'groups.group_name', 'sections.name')
+                             .group_by { |x| x[:id] }
+    members = groupings.joins(:accepted_students)
+                       .pluck_to_hash(:id, 'users.user_name', 'users.first_name', 'users.last_name')
+                       .group_by { |x| x[:id] }
+    groupings_with_results = groupings.includes(current_result: :marks).includes(:submitted_remark, :extension)
+    result_ids = groupings_with_results.pluck('results.id').uniq.compact
+    extra_marks_hash = Result.get_total_extra_marks(result_ids, max_mark: max_mark)
 
-        csv << final_result
+    hide_unassigned = user.ta? && hide_unassigned_criteria
+
+    criteria_shown = Set.new
+    max_mark = 0
+
+    selected_criteria = user.admin? ? self.criteria : self.ta_criteria
+    criteria_columns = selected_criteria.map do |crit|
+      unassigned = !assigned_criteria.nil? && !assigned_criteria.include?(crit.id)
+      next if hide_unassigned && unassigned
+
+      max_mark += crit.max_mark
+      accessor = crit.id
+      criteria_shown << accessor
+      {
+        Header: crit.name,
+        accessor: "criteria.#{accessor}",
+        className: 'number ' + (unassigned ? 'unassigned' : ''),
+        headerClassName: unassigned ? 'unassigned' : ''
+      }
+    end.compact
+
+    final_data = groupings_with_results.map do |g|
+      result = g.current_result
+      has_remark = g.current_submission_used&.submitted_remark.present?
+      if user.ta? && anonymize_groups
+        group_name = "#{Group.model_name.human} #{g.id}"
+        section = ''
+        group_members = []
+      else
+        group_name = grouping_data[g.id][0]['groups.group_name']
+        section = grouping_data[g.id][0]['sections.name']
+        group_members = members.fetch(g.id, [])
+                               .map { |s| [s['users.user_name'], s['users.first_name'], s['users.last_name']] }
       end
+
+      criteria = result.nil? ? {} : result.mark_hash.select { |key, _| criteria_shown.include?(key) }
+      extra_mark = extra_marks_hash[result&.id]
+      {
+        group_name: group_name,
+        section: section,
+        members: group_members,
+        graders: graders.fetch(g.id, [])
+                        .map { |s| [s['users.user_name'], s['users.first_name'], s['users.last_name']] },
+        marking_state: marking_state(has_remark,
+                                     result&.marking_state,
+                                     result&.released_to_students,
+                                     g.collection_date),
+        final_grade: criteria.values.compact.sum + (extra_mark || 0),
+        criteria: criteria,
+        max_mark: max_mark,
+        result_id: result&.id,
+        submission_id: result&.submission_id,
+        total_extra_marks: extra_mark
+      }
     end
+
+    { data: final_data,
+      criteriaColumns: criteria_columns,
+      numAssigned: self.get_num_assigned(user.admin? ? nil : user.id),
+      numMarked: self.get_num_marked(user.admin? ? nil : user.id) }
   end
 
-  def replace_submission_rule(new_submission_rule)
-    if self.submission_rule.nil?
-      self.submission_rule = new_submission_rule
-      self.save
+  # Generate CSV summary of grades for this assignment
+  # for the current user. The user should be an admin or TA.
+  def summary_csv(user)
+    return '' unless user.admin?
+
+    if user.admin?
+      groupings = self.groupings
+                    .includes(:group,
+                              :accepted_students,
+                              current_result: :marks)
     else
-      self.submission_rule.destroy
-      self.submission_rule = new_submission_rule
-      self.save
+      groupings = self.groupings
+                    .includes(:group,
+                              :accepted_students,
+                              current_result: :marks)
+                    .joins(:memberships)
+                    .where('memberships.user_id': user.id)
+    end
+
+    headers = [['User name', 'Group', 'Final grade'], ['', 'Out of', self.max_mark]]
+    self.ta_criteria.each do |crit|
+      headers[0] << crit.name
+      headers[1] << crit.max_mark
+    end
+    headers[0] << 'Bonus/Deductions'
+    headers[1] << ''
+
+    result_ids = groupings.pluck('results.id').uniq.compact
+    extra_marks_hash = Result.get_total_extra_marks(result_ids, max_mark: max_mark)
+    CSV.generate do |csv|
+      csv << headers[0]
+      csv << headers[1]
+
+      groupings.each do |g|
+        result = g.current_result
+        marks = result.nil? ? {} : result.mark_hash
+        g.accepted_students.each do |s|
+          row = [s.user_name, g.group.group_name]
+          if result.nil?
+            row += Array.new(2 + self.ta_criteria.count, nil)
+          else
+            row << result.total_mark
+            row += self.ta_criteria.map { |crit| marks[crit.id] }
+            row << extra_marks_hash[result&.id]
+          end
+          csv << row
+        end
+      end
+    end
+  end
+
+  # Returns an array of [mark, max_mark].
+  def get_marks_list(submission)
+    criteria.map do |criterion|
+      mark = submission.get_latest_result.marks.find_by(criterion: criterion)
+      [(mark.nil? || mark.mark.nil?) ? '' : mark.mark,
+       criterion.max_mark]
     end
   end
 
   def next_criterion_position
     # We're using count here because this fires off a DB query, thus
-    # grabbing the most up-to-date count of the rubric criteria.
-    self.rubric_criteria.count + 1
+    # grabbing the most up-to-date count of the criteria.
+    criteria.count > 0 ? criteria.last.position + 1 : 1
   end
 
-  def get_criteria
-    if self.marking_scheme_type == 'rubric'
-      self.rubric_criteria
-    else
-      self.flexible_criteria
+  # Determine the total mark for a particular student, as a percentage
+  def calculate_total_percent(result, out_of)
+    total = result.total_mark
+
+    percent = BLANK_MARK
+
+    # Check for NA mark or division by 0
+    unless total.nil? || out_of == 0
+      percent = (total / out_of) * 100
     end
+    percent
   end
 
-  def criteria_count
-    if self.marking_scheme_type == 'rubric'
-      self.rubric_criteria.size
-    else
-      self.flexible_criteria.size
-    end
-  end
+  # An array of all the grades for an assignment
+  def percentage_grades_array
+    grades = Array.new
+    out_of = max_mark
 
-  # Returns an array with the number of groupings who scored between
-  # certain percentage ranges [0-5%, 6-10%, ...]
-  # intervals defaults to 20
-  def grade_distribution_as_percentage(intervals=20)
-    distribution = Array.new(intervals, 0)
-    out_of = self.total_mark
-
-    if out_of == 0
-      return distribution
-    end
-
-    steps = 100 / intervals # number of percentage steps in each interval
-    groupings = self.groupings.all(:include => [{:current_submission_used => :results}])
-
-    groupings.each do |grouping|
-      submission = grouping.current_submission_used
-      if submission && submission.has_result?
-        result = submission.get_latest_completed_result
-        unless result.nil?
-          percentage = (result.total_mark / out_of * 100).ceil
-          if percentage == 0
-            distribution[0] += 1
-          elsif percentage >= 100
-            distribution[intervals - 1] += 1
-          elsif (percentage % steps) == 0
-            distribution[percentage / steps - 1] += 1
-          else
-            distribution[percentage / steps] += 1
-          end
-        end
+    groupings.includes(:current_result).each do |grouping|
+      result = grouping.current_result
+      unless result.nil? || result.total_mark.nil? || result.marking_state != Result::MARKING_STATES[:complete]
+        percent = calculate_total_percent(result, out_of)
+        grades.push(percent) unless percent == BLANK_MARK
       end
-    end # end of groupings loop
+    end
 
-    distribution
+    return grades
+  end
+
+  # Returns grade distribution for a grade entry item for each student
+  def grade_distribution_array(intervals = 20)
+    data = percentage_grades_array
+    data.extend(Histogram)
+    histogram = data.histogram(intervals, :min => 1, :max => 100, :bin_boundary => :min, :bin_width => 100 / intervals)
+    distribution = histogram.fetch(1)
+    distribution[0] = distribution.first + data.count{ |x| x < 1 }
+    distribution[-1] = distribution.last + data.count{ |x| x > 100 }
+
+    return distribution
   end
 
   # Returns all the TAs associated with the assignment
   def tas
-    ids = self.ta_memberships.map { |m| m.user_id }
-    Ta.find(ids)
+    Ta.find(ta_memberships.map(&:user_id))
   end
 
-  # Returns all the submissions that have been graded (completed)
-  def graded_submissions
-    results = []
-    groupings.each do |grouping|
-      if grouping.marking_completed?
-        submission = grouping.current_submission_used
-        results.push(submission.get_latest_result) unless submission.nil?
+  # Returns all the submissions that have not been graded (completed).
+  # Note: This assumes that every submission has at least one result.
+  def ungraded_submission_results
+    current_submissions_used.joins(:current_result)
+                            .where('results.marking_state': Result::MARKING_STATES[:incomplete])
+  end
+
+  def is_criteria_mark?(ta_id)
+    assign_graders_to_criteria && self.criterion_ta_associations.where(ta_id: ta_id).any?
+  end
+
+  def get_num_assigned(ta_id = nil)
+    if ta_id.nil?
+      groupings.size
+    else
+      ta_memberships.where(user_id: ta_id).size
+    end
+  end
+
+  def get_num_valid
+    groupings.includes(:non_rejected_student_memberships, current_submission_used: :submitted_remark)
+             .select(&:is_valid?)
+             .size
+  end
+
+  def get_num_marked(ta_id = nil)
+    if ta_id.nil?
+      results_join = groupings.left_outer_joins(:current_result)
+      num_incomplete = results_join.where('results.id': nil)
+                                   .or(results_join.where('results.marking_state': 'incomplete'))
+                                   .count
+      get_num_assigned - num_incomplete
+    else
+      if is_criteria_mark?(ta_id)
+        n = 0
+        ta = Ta.find(ta_id)
+        num_assigned_criteria = ta.criterion_ta_associations.where(assignment: self).count
+        marked = ta.criterion_ta_associations
+                   .joins('INNER JOIN marks m ON criterion_ta_associations.criterion_id = m.criterion_id')
+                   .where('m.mark IS NOT NULL AND assessment_id = ?', self.id)
+                   .group('m.result_id')
+                   .count
+        ta_memberships.includes(grouping: :current_result).where(user_id: ta_id).find_each do |t_mem|
+          next if t_mem.grouping.current_result.nil?
+          result_id = t_mem.grouping.current_result.id
+          num_marked = marked[result_id] || 0
+          if num_marked == num_assigned_criteria
+            n += 1
+          end
+        end
+        n
+      else
+        results_join = groupings.joins(:ta_memberships)
+                                .where('memberships.user_id': ta_id)
+                                .left_outer_joins(:current_result)
+        num_incomplete = results_join.where('results.id': nil)
+                                     .or(results_join.where('results.marking_state': 'incomplete'))
+                                     .count
+        get_num_assigned(ta_id) - num_incomplete
       end
     end
-    results
   end
 
-  def groups_submitted
-    self.groupings.select { |grouping| grouping.has_submission?}
+  def get_num_annotations(ta_id = nil)
+    if ta_id.nil?
+      num_annotations_all
+    else
+      # uniq is required since entries are doubled if there is a remark request
+      Submission.joins(:annotations, :current_result, grouping: :ta_memberships)
+                .where(submissions: { submission_version_used: true },
+                       memberships: { user_id: ta_id },
+                       results: { marking_state: Result::MARKING_STATES[:complete] },
+                       groupings: { assessment_id: self.id })
+                .select('annotations.id').uniq.size
+    end
+  end
+
+  def num_annotations_all
+    groupings = Grouping.arel_table
+    submissions = Submission.arel_table
+    subs = Submission.joins(:grouping)
+                     .where(groupings[:assessment_id].eq(id)
+                     .and(submissions[:submission_version_used].eq(true)))
+
+    res = Result.submitted_remarks_and_all_non_remarks
+                .where(submission_id: subs.pluck(:id))
+    filtered_subs = subs.where(id: res.pluck(:submission_id))
+    Annotation.joins(:submission_file)
+              .where(submission_files:
+                  { submission_id: filtered_subs.pluck(:id) }).size
+  end
+
+  def average_annotations(ta_id = nil)
+    num_marked = get_num_marked(ta_id)
+    avg = 0
+    if num_marked != 0
+      num_annotations = get_num_annotations(ta_id)
+      avg = num_annotations.to_f / num_marked
+    end
+    avg.round(2)
+  end
+
+  # Returns the groupings of this assignment associated with the given section
+  def section_groupings(section)
+    groupings.select do |grouping|
+      grouping.inviter.present? &&
+      grouping.inviter.has_section? &&
+      grouping.inviter.section.id == section.id
+    end
+  end
+
+  def has_a_collected_submission?
+    submissions.where(submission_version_used: true).count > 0
+  end
+  # Returns the groupings of this assignment that have no associated section
+  def sectionless_groupings
+    groupings.select do |grouping|
+      grouping.inviter.present? &&
+          !grouping.inviter.has_section?
+    end
+  end
+
+  def current_results
+    groupings.includes(:current_result).map(&:current_result)
+  end
+
+  # Returns true if this is a peer review, meaning it has a parent assignment,
+  # false otherwise.
+  def is_peer_review?
+    !parent_assessment_id.nil?
+  end
+
+  # Returns true if this is a parent assignment that has a child peer review
+  # assignment.
+  def has_peer_review_assignment?
+    not pr_assignment.nil?
+  end
+
+  def create_peer_review_assignment_if_not_exist
+    return unless has_peer_review && Assignment.where(parent_assessment_id: id).empty?
+    peerreview_assignment = Assignment.new
+    peerreview_assignment.parent_assignment = self
+    peerreview_assignment.token_period = 1
+    peerreview_assignment.non_regenerating_tokens = false
+    peerreview_assignment.unlimited_tokens = false
+    peerreview_assignment.repository_folder = repository_folder
+    peerreview_assignment.short_identifier = short_identifier + '_pr'
+    peerreview_assignment.description = description
+    peerreview_assignment.due_date = due_date
+    peerreview_assignment.is_hidden = true
+    peerreview_assignment.message = message
+
+    # We do not want to have the database in an inconsistent state, so we
+    # need to have the database rollback the 'has_peer_review' column to
+    # be false
+    return if peerreview_assignment.save
+    raise ActiveRecord::Rollback
+  end
+
+  ### REPO ###
+
+  def starter_file_path
+    File.join(Rails.configuration.x.starter_file.storage, repository_folder)
+  end
+
+  def default_starter_file_group
+    default = starter_file_groups.find_by(id: self.default_starter_file_group_id)
+    default.nil? ? starter_file_groups.order(:id).first : default
+  end
+
+  def starter_file_mappings
+    groupings.joins(:group, grouping_starter_file_entries: [starter_file_entry: :starter_file_group])
+             .pluck_to_hash('groups.group_name as group_name',
+                            'starter_file_groups.name as starter_file_group_name',
+                            'starter_file_entries.path as starter_file_entry_path')
+  end
+
+  # Yield an open repo for each grouping of this assignment, then yield again for each repo that raised an exception, to
+  # try to mitigate concurrent accesses to those repos.
+  def each_group_repo
+    failed_groups = []
+    self.groupings.each do |grouping|
+      group = grouping.group
+      begin
+        group.access_repo do |repo|
+          yield(repo)
+        end
+      rescue StandardError
+        # in the event of a concurrent repo modification, retry later
+        failed_groups << group
+      end
+    end
+    failed_groups.each do |group|
+      begin
+        group.access_repo do |repo|
+          yield(repo)
+        end
+      rescue StandardError
+        # give up
+      end
+    end
+  end
+
+  # Repository authentication subtleties:
+  # 1) a repository is associated with a Group, but..
+  # 2) ..students are associated with a Grouping (an "instance" of Group for a specific Assignment)
+  # That creates a problem since authentication in svn/git is at the repository level, while Markus handles it at
+  # the assignment level, allowing the same Group repo to have different students according to the assignment.
+  # The two extremes to implement it are using the union of all students (permissive) or the intersection (restrictive).
+  # Instead, we are going to take a last-deadline approach, where we assume that the valid students at any point in time
+  # are the ones valid for the last assignment due.
+  # (Basically, it's nice for a group to share a repo among assignments, but at a certain point during the course
+  # we may want to add or [more frequently] remove some students from it)
+  def self.get_repo_auth_records
+    records = Assignment.joins(:assignment_properties)
+                        .includes(groupings: [:group, { accepted_student_memberships: :user }])
+                        .where(assignment_properties: { vcs_submit: true })
+                        .order(due_date: :desc)
+    records.where(assignment_properties: { is_timed: false })
+           .or(records.where.not(groupings: { start_time: nil }))
+  end
+
+  ### /REPO ###
+
+  def self.get_required_files
+    assignments = Assignment.includes(:assignment_files, :assignment_properties)
+                            .where(assignment_properties: { scanned_exam: false }, is_hidden: false)
+    required = {}
+    assignments.each do |assignment|
+      files = assignment.assignment_files.map(&:filename)
+      if assignment.only_required_files.nil?
+        required_only = false
+      else
+        required_only = assignment.only_required_files
+      end
+      required[assignment.repository_folder] = { required: files, required_only: required_only }
+    end
+    required
+  end
+
+  def autotest_path
+    File.join(TestRun::ASSIGNMENTS_DIR, self.repository_folder)
+  end
+
+  def autotest_files_dir
+    File.join(autotest_path, TestRun::FILES_DIR)
+  end
+
+  def autotest_files
+    files_dir = Pathname.new autotest_files_dir
+    return [] unless Dir.exist? files_dir
+
+    Dir.glob("#{files_dir}/**/*", File::FNM_DOTMATCH).map do |f|
+      unless %w[.. .].include?(File.basename(f))
+        Pathname.new(f).relative_path_from(files_dir).to_s
+      end
+    end.compact
+  end
+
+  def autotest_settings_file
+    File.join(autotest_path, TestRun::SPECS_FILE)
+  end
+
+  # Retrieve current grader data.
+  def current_grader_data
+    ta_counts = self.criterion_ta_associations.group(:ta_id).count
+    grader_data = self.groupings
+                      .joins(:tas)
+                      .group('users.user_name')
+                      .count
+    graders = Ta.pluck(:user_name, :first_name, :last_name, :id).map do |user_name, first_name, last_name, id|
+      {
+        user_name: user_name,
+        first_name: first_name,
+        last_name: last_name,
+        groups: grader_data[user_name] || 0,
+        _id: id,
+        criteria: ta_counts[id] || 0
+      }
+    end
+
+    group_data = self.groupings
+                     .left_outer_joins(:tas, :group)
+                     .pluck('groupings.id', 'groups.group_name', 'users.user_name',
+                            'groupings.criteria_coverage_count')
+    groups = Hash.new { |h, k| h[k] = [] }
+    group_data.each do |group_id, group_name, ta, count|
+      groups[[group_id, group_name, count]]
+      groups[[group_id, group_name, count]] << ta unless ta.nil?
+    end
+    # TODO: improve the group_sections calculation.
+    # In particular, this should be unified with Grouping#section.
+    group_sections = {}
+    self.groupings.includes(:accepted_students).find_each do |g|
+      s = g.accepted_students.first
+      group_sections[g.id] = s&.section_id
+    end
+    groups = groups.map do |k, v|
+      {
+        _id: k[0],
+        group_name: k[1],
+        criteria_coverage_count: k[2],
+        section: group_sections[k[0]],
+        graders: v
+      }
+    end
+
+    criterion_data =
+      self.criteria.left_outer_joins(:tas)
+          .pluck('criteria.name', 'criteria.position',
+                 'criteria.assigned_groups_count', 'users.user_name')
+    criteria = Hash.new { |h, k| h[k] = [] }
+    criterion_data.sort_by { |c| c[3] || '' }.each do |name, pos, count, ta|
+      criteria[[name, pos, count]]
+      criteria[[name, pos, count]] << ta unless ta.nil?
+    end
+    criteria = criteria.map do |k, v|
+      {
+        name: k[0],
+        _id: k[1], # Note: _id is the *position* of the criterion
+        coverage: k[2],
+        graders: v
+      }
+    end
+
+    {
+      groups: groups,
+      criteria: criteria,
+      graders: graders,
+      assign_graders_to_criteria: self.assign_graders_to_criteria,
+      anonymize_groups: self.anonymize_groups,
+      hide_unassigned_criteria: self.hide_unassigned_criteria,
+      sections: Hash[Section.all.pluck(:id, :name)]
+    }
+  end
+
+  # Retrieve data for submissions table.
+  # Uses joins and pluck rather than includes to improve query speed.
+  def current_submission_data(current_user)
+    if current_user.admin?
+      groupings = self.groupings
+    elsif current_user.ta?
+      groupings = self.groupings.where(id: self.groupings.joins(:ta_memberships)
+                                                         .where('memberships.user_id': current_user.id)
+                                                         .select(:'groupings.id'))
+    else
+      return []
+    end
+
+    data = groupings
+           .left_outer_joins(:group, :current_submission_used)
+           .pluck('groupings.id',
+                  'groups.group_name',
+                  'submissions.revision_timestamp',
+                  'submissions.is_empty',
+                  'groupings.start_time')
+
+    tag_data = groupings
+               .joins(:tags)
+               .pluck_to_hash('groupings.id', 'tags.name')
+               .group_by { |h| h['groupings.id'] }
+
+    if self.submission_rule.is_a? GracePeriodSubmissionRule
+      deductions = groupings
+                   .joins(:grace_period_deductions)
+                   .group('groupings.id')
+                   .maximum('grace_period_deductions.deduction')
+    else
+      deductions = {}
+    end
+
+    result_data = groupings
+                  .left_outer_joins(current_submission_used: [:current_result, :submitted_remark])
+                  .order('results.created_at DESC')
+                  .pluck_to_hash('groupings.id',
+                                 'results.id',
+                                 'results.marking_state',
+                                 'results.total_mark',
+                                 'results.released_to_students')
+                  .group_by { |h| h['groupings.id'] }
+
+    if current_user.ta? && anonymize_groups
+      member_data = {}
+      section_data = {}
+    else
+      member_data = groupings.joins(:accepted_students)
+                             .pluck_to_hash('groupings.id', 'users.user_name')
+                             .group_by { |h| h['groupings.id'] }
+
+      section_data = groupings.joins(inviter: :section)
+                              .pluck('groupings.id', 'sections.name')
+                              .to_h
+    end
+
+    if current_user.ta? && hide_unassigned_criteria
+      assigned_criteria = current_user.criterion_ta_associations
+                                      .where(assessment_id: self.id)
+                                      .pluck(:criterion_id)
+    else
+      assigned_criteria = nil
+    end
+
+    visible_criteria = current_user.admin? ? self.criteria : self.ta_criteria
+    criteria = visible_criteria.reject do |crit|
+      !assigned_criteria.nil? && !assigned_criteria.include?(crit.id)
+    end
+
+    result_ids = result_data.values.map { |arr| arr.map { |h| h['results.id'] } }.flatten
+
+    total_marks = Mark.where(criterion: criteria, result_id: result_ids)
+                      .pluck(:result_id, :mark)
+                      .group_by(&:first)
+                      .transform_values { |arr| arr.map(&:second).compact.sum }
+
+    max_mark = criteria.map(&:max_mark).compact.sum
+    extra_marks_hash = Result.get_total_extra_marks(result_ids, max_mark: max_mark)
+
+    collection_dates = all_grouping_collection_dates
+
+    data_collections = [tag_data, result_data, member_data, section_data, collection_dates]
+
+    # This is the submission data that's actually returned
+    data.map do |grouping_id, group_name, revision_timestamp, is_empty, start_time|
+      tag_info, result_info, member_info, section_info, collection_date = data_collections.map { |c| c[grouping_id] }
+      has_remark = result_info&.count&.> 1
+      result_info = result_info&.first || {}
+
+      base = {
+        _id: grouping_id, # Needed for checkbox version of react-table
+        max_mark: max_mark,
+        group_name: current_user.ta? && anonymize_groups ? "#{Group.model_name.human} #{grouping_id}" : group_name,
+        tags: (tag_info.nil? ? [] : tag_info.map { |h| h['tags.name'] }),
+        marking_state: marking_state(has_remark,
+                                     result_info['results.marking_state'],
+                                     result_info['results.released_to_students'],
+                                     collection_date)
+      }
+
+      # i18n-tasks-use t('time.formats.shorter')
+      base[:start_time] = I18n.l(start_time, format: :shorter) if self.is_timed && !start_time.nil?
+
+      unless is_empty || revision_timestamp.nil?
+        # TODO: for some reason, this is not automatically converted to our timezone by the query
+        base[:submission_time] = I18n.l(revision_timestamp.in_time_zone, format: :shorter)
+      end
+
+      if result_info['results.id'].present?
+        extra_mark = extra_marks_hash[result_info['results.id']] || 0
+        base[:result_id] = result_info['results.id']
+        base[:final_grade] = (total_marks[result_info['results.id']] || 0.0) + extra_mark
+      end
+
+      base[:members] = member_info.map { |h| h['users.user_name'] } unless member_info.nil?
+      base[:section] = section_info unless section_info.nil?
+      base[:grace_credits_used] = deductions[grouping_id] if self.submission_rule.is_a? GracePeriodSubmissionRule
+
+      base
+    end
+  end
+
+  def to_xml(options = {})
+    attributes_hash = self.assignment_properties.attributes.merge(self.attributes).symbolize_keys
+    attributes_hash.select { |key, _| Api::AssignmentsController::DEFAULT_FIELDS.include? key }.to_xml(options)
+  end
+
+  def to_json(options = {})
+    self.assignment_properties.attributes.merge(self.attributes).symbolize_keys.to_json(options)
+  end
+
+  # zip all files in the folder at +self.autotest_files_dir+ and return the
+  # path to the zip file
+  def zip_automated_test_files(user)
+    zip_name = "#{self.short_identifier}-testfiles-#{user.user_name}"
+    zip_path = File.join('tmp', zip_name + '.zip')
+    FileUtils.rm_rf zip_path
+    files_dir = Pathname.new self.autotest_files_dir
+    Zip::File.open(zip_path, Zip::File::CREATE) do |zip_file|
+      self.autotest_files.map do |file|
+        path = File.join zip_name, file
+        abs_path = files_dir.join(file)
+        if abs_path.directory?
+          zip_file.mkdir(path)
+        else
+          zip_file.get_output_stream(path) { |f| f.puts abs_path.read }
+        end
+      end
+    end
+    zip_path
   end
 
   private
 
-  # Returns true if we are safe to set the repository name
-  # to a non-autogenerated value. Called by add_csv_group.
-  def is_candidate_for_setting_custom_repo_name?(row)
-    # Repository name can be customized if
-    #  - this assignment is set up to allow external submits only
-    #  - group_max = 1
-    #  - there's only one student member in this row of the csv and
-    #  - the group name is equal to the only group member
-    if MarkusConfigurator.markus_config_repository_admin? &&
-       self.allow_web_submits == false &&
-       row.length == 3 && self.group_max == 1 &&
-       !row[2].blank? && row[0] == row[2]
-      true
-    else
-      false
+  def create_autotest_dirs
+    FileUtils.mkdir_p self.autotest_path
+    FileUtils.mkdir_p self.autotest_files_dir
+  end
+
+  # Returns the marking state used in the submission and course summary tables
+  # for the result(s) for single submission.
+  #
+  # +has_remark+ is a boolean indicating whether a remark request exists for this submission
+  # +result_marking_state+ is one of Result::MARKING_STATES or nil if there are no results for this submission
+  # +released_to_students+ is a boolean indicating whether a result has been released to students
+  # +collection_date+ is a Time object indicating when the submission was collected
+  def marking_state(has_remark, result_marking_state, released_to_students, collection_date)
+    if result_marking_state.present?
+      return 'remark' if result_marking_state == Result::MARKING_STATES[:incomplete] && has_remark
+      return 'released' if released_to_students
+
+      return result_marking_state
     end
+    return 'not_collected' if collection_date < Time.current
+
+    'before_due_date'
   end
 
   def reset_collection_time
@@ -826,8 +1234,85 @@ class Assignment < ActiveRecord::Base
   end
 
   def update_assigned_tokens
-    self.tokens.each do |t|
-      t.update_tokens(self.tokens_per_day_was, self.tokens_per_day)
+    difference = assignment_properties.tokens_per_period -
+        (assignment_properties.tokens_per_period_before_last_save || 0)
+    if difference == 0
+      return
     end
+    groupings.each do |g|
+      g.test_tokens = [g.test_tokens + difference, 0].max
+      g.save
+    end
+  end
+
+  # Returns an output file for controller to handle.
+  def self.get_assignment_list(file_format)
+    assignments = self.all
+    case file_format
+    when 'yml'
+      map = {}
+      map[:assignments] = assignments.map do |assignment|
+        m = {}
+        DEFAULT_FIELDS.each do |f|
+          m[f] = assignment.send(f)
+        end
+        m
+      end
+      map.to_yaml
+    when 'csv'
+      MarkusCsv.generate(assignments) do |assignment|
+        DEFAULT_FIELDS.map do |f|
+          assignment.send(f)
+        end
+      end
+    end
+  end
+
+  def self.upload_assignment_list(file_format, assignment_data)
+    case file_format
+    when 'csv'
+      result = MarkusCsv.parse(assignment_data) do |row|
+        assignment = self.find_or_create_by(short_identifier: row[0])
+        attrs = Hash[DEFAULT_FIELDS.zip(row)]
+        attrs.delete_if { |_, v| v.nil? }
+        if assignment.new_record?
+          assignment.assignment_properties.repository_folder = row[0]
+          assignment.assignment_properties.token_period = 1
+          assignment.assignment_properties.unlimited_tokens = false
+        end
+        assignment.update(attrs)
+        raise CsvInvalidLineError unless assignment.valid?
+      end
+      result
+    when 'yml'
+      begin
+        map = assignment_data.deep_symbolize_keys
+        map[:assignments].map do |row|
+          assignment = self.find_or_create_by(short_identifier: row[:short_identifier])
+          if assignment.new_record?
+            row[:assignment_properties_attributes] = {}
+            row[:assignment_properties_attributes][:repository_folder] = row[:short_identifier]
+            row[:assignment_properties_attributes][:token_period] = 1
+            row[:assignment_properties_attributes][:unlimited_tokens] = false
+            row[:submission_rule] = NoLateSubmissionRule.new
+            row[:assignment_stat] = AssignmentStat.new
+          end
+          assignment.update(row)
+          unless assignment.id
+            assignment[:display_median_to_students] = false
+            assignment[:display_grader_names_to_students] = false
+          end
+        end
+      rescue ActiveRecord::ActiveRecordError, ArgumentError => e
+        e
+      end
+    end
+  end
+
+  def create_associations
+    return unless self.new_record?
+    self.assignment_properties ||= AssignmentProperties.new
+    self.assignment_stat ||= AssignmentStat.new
+    self.submission_rule ||= NoLateSubmissionRule.new
   end
 end

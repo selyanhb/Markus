@@ -8,139 +8,111 @@ module SubmissionsHelper
     end
   end
 
-  def set_release_on_results(groupings, release, errors)
-    changed = 0
-    groupings.each do |grouping|
-      begin
-        raise I18n.t('marking_state.no_submission', :group_name => grouping.group.group_name) if !grouping.has_submission?
-        submission = grouping.current_submission_used
-        raise I18n.t('marking_state.no_result', :group_name => grouping.group.group_name) if !submission.has_result?
-        raise I18n.t('marking_state.not_complete', :group_name => grouping.group.group_name) if
-          submission.get_latest_result.marking_state != Result::MARKING_STATES[:complete] && release
-        raise I18n.t('marking_state.not_complete_unrelease', :group_name => grouping.group.group_name) if
-          submission.get_latest_result.marking_state != Result::MARKING_STATES[:complete]
-        @result = submission.get_latest_result
-        @result.released_to_students = release
-        unless @result.save
-          raise I18n.t('marking_state.result_not_saved', :group_name => grouping.group.group_name)
-        end
-        changed += 1
-      rescue Exception => e
-        errors.push(e.message)
-      end
+  def set_pr_release_on_results(groupings, release)
+    Result.transaction do
+      Result.where(id: groupings.joins(peer_reviews_to_others: :result).pluck('results.id'))
+            .update_all(released_to_students: release)
     end
-    changed
   end
 
+  # Release or unrelease the submissions of a set of groupings.
+  def set_release_on_results(groupings, release)
+    result = Result.transaction do
+      without_submissions = groupings.where.not(id: groupings.joins(:current_submission_used))
 
-  # Collects submissions for all the groupings of the given section and assignment
-  # Return the number of actually collected submissions
-  def collect_submissions_for_section(section_id, assignment, errors)
-
-    collected = 0
-
-    begin
-
-      raise I18n.t('collect_submissions.could_not_find_section') if !Section.exists?(section_id)
-      section = Section.find(section_id)
-
-      # Check collection date
-      if Time.zone.now < SectionDueDate.due_date_for(section, assignment)
-        raise I18n.t('collect_submissions.could_not_collect_section',
-          :assignment_identifier => assignment.short_identifier,
-          :section_name => section.name)
+      if without_submissions.present?
+        group_names = without_submissions.joins(:group).pluck(:group_name).join(', ')
+        raise I18n.t('submissions.errors.no_submission', group_name: group_names)
       end
 
-      # Collect and count submissions for all groupings of this section
-      groupings = Grouping.find_all_by_assignment_id(assignment.id)
-      submission_collector = SubmissionCollector.instance
-      groupings.each do |grouping|
-        if grouping.section == section.name
-          submission_collector.push_grouping_to_priority_queue(grouping)
-          collected += 1
+      without_complete_result = groupings.joins(:current_result)
+                                         .where.not('results.marking_state': Result::MARKING_STATES[:complete])
+
+      if without_complete_result.present?
+        group_names = without_complete_result.joins(:group).pluck(:group_name).join(', ')
+        raise t('submissions.errors.not_complete', group_name: group_names) if release
+
+        raise t('submissions.errors.not_complete_unrelease', group_name: group_names)
+      end
+
+      Result.where(id: groupings.joins(:current_result).pluck('results.id'))
+            .update_all(released_to_students: release)
+    end
+
+    if release
+      groupings.includes(:accepted_students).each do |grouping|
+        grouping.accepted_students.each do |student|
+          if student.receives_results_emails?
+            NotificationMailer.with(user: student, grouping: grouping).release_email.deliver_later
+          end
         end
       end
-
-      if collected == 0
-        raise I18n.t('collect_submissions.no_submission_for_section',
-          :section_name => section.name)
-      end
-
-    rescue Exception => e
-      errors.push(e.message)
     end
 
-    collected
-
-  end
-
-
-  def construct_file_manager_dir_table_row(directory_name, directory)
-    table_row = {}
-    table_row[:id] = directory.object_id
-    table_row[:filter_table_row_contents] = render_to_string :partial => 'submissions/table_row/directory_table_row', :locals => {:directory_name => directory_name, :directory => directory}
-    table_row[:filename] = directory_name
-    table_row[:last_modified_date_unconverted] = directory.last_modified_date.strftime('%b %d, %Y %H:%M')
-    table_row[:revision_by] = directory.user_id
-    table_row
-
-  end
-
-  def construct_file_manager_table_row(file_name, file)
-    table_row = {}
-    table_row[:id] = file.object_id
-    table_row[:filter_table_row_contents] = render_to_string :partial => 'submissions/table_row/filter_table_row', :locals => {:file_name => file_name, :file => file}
-
-    table_row[:filename] = file_name
-
-    table_row[:last_modified_date] = file.last_modified_date.strftime('%d %B, %l:%M%p')
-
-    table_row[:last_modified_date_unconverted] = file.last_modified_date.strftime('%b %d, %Y %H:%M')
-
-    table_row[:revision_by] = file.user_id
-
-    table_row
-  end
-
-
-  def construct_file_manager_table_rows(files)
-    result = {}
-    files.each do |file_name, file|
-      result[file.object_id] = construct_file_manager_table_row(file_name, file)
-    end
     result
   end
 
-  def construct_repo_browser_table_row(file_name, file)
-    table_row = {}
-    table_row[:id] = file.object_id
-    table_row[:filter_table_row_contents] = render_to_string :partial => 'submissions/repo_browser/filter_table_row', :locals => {:file_name => file_name, :file => file}
-    table_row[:filename] = file_name
-    table_row[:last_modified_date] = file.last_modified_date.strftime('%d %B, %l:%M%p')
-    table_row[:last_modified_date_unconverted] = file.last_modified_date.strftime('%b %d, %Y %H:%M')
-    table_row[:revision_by] = file.user_id
-    table_row
-  end
-
-  def construct_repo_browser_directory_table_row(directory_name, directory)
-    table_row = {}
-    table_row[:id] = directory.object_id
-    table_row[:filter_table_row_contents] = render_to_string :partial => 'submissions/repo_browser/directory_row', :locals => {:directory_name => directory_name, :directory => directory}
-    table_row[:filename] = directory_name
-    table_row[:last_modified_date] = directory.last_modified_date.strftime('%d %B, %l:%M%p')
-    table_row[:last_modified_date_unconverted] = directory.last_modified_date.strftime('%b %d, %Y %H:%M')
-    table_row[:revision_by] = directory.user_id
-    table_row
-  end
-
-  def construct_repo_browser_table_rows(files)
-    result = {}
-    files.each do |file_name, file|
-      result[file.object_id] = construct_repo_browser_row(file_name, file)
+  # If the grouping is collected or has an error,
+  # style the table row green or red respectively.
+  # Classname will be applied to the table row
+  # and actually styled in CSS.
+  def get_tr_class(grouping, assignment)
+    if assignment.is_peer_review?
+      nil
+    elsif grouping.is_collected?
+      'submission_collected'
+    else
+      nil
     end
-    result
   end
 
+  def get_grouping_name_url(grouping, result)
+    if grouping.assignment.is_peer_review? && !grouping.peer_reviews_to_others.empty? && result.is_a_review?
+      url_for(view_marks_assignment_submission_result_path(
+                  assignment_id: grouping.assignment.parent_assignment.id, submission_id: result.submission.id,
+                  id: result.id, reviewer_grouping_id: grouping.id))
+    elsif grouping.is_collected?
+      url_for(edit_assignment_submission_result_path(
+                  grouping.assignment, result.submission_id, result))
+    else
+      ''
+    end
+  end
+
+  #TODO: Add a route in routes.rb and method mark_peer_review in the peer_reviews controller
+  def get_url_peer(grouping, id)
+    if grouping.is_collected?
+      url_for(controller: 'peer_reviews', action: 'mark_peer_review', peer_review_id: id)
+    else
+      ''
+    end
+  end
+
+  def get_file_info(file_name, file, assignment_id, revision_identifier, path, grouping_id)
+    return if Repository.get_class.internal_file_names.include? file_name
+    f = {}
+    f[:id] = file.object_id
+    f[:url] = download_assignment_submissions_url(
+      id: assignment_id,
+      revision_identifier: revision_identifier,
+      file_name: file_name,
+      path: path,
+      grouping_id: grouping_id
+    )
+    f[:filename] = view_context.image_tag('icons/page_white_text.png') +
+                   view_context.link_to(" #{file_name}", action: 'download',
+                                                         id: assignment_id,
+                                                         revision_identifier: revision_identifier,
+                                                         file_name: file_name,
+                                                         path: path, grouping_id: grouping_id)
+    f[:raw_name] = file_name
+    f[:last_revised_date] = I18n.l(file.last_modified_date)
+    f[:last_modified_revision] = revision_identifier
+    f[:revision_by] = file.user_id
+    f[:submitted_date] = I18n.l(file.submitted_date)
+    f[:type] = SubmissionFile.get_file_type(file_name)
+    f
+  end
 
   def sanitize_file_name(file_name)
     # If file_name is blank, return the empty string
@@ -150,14 +122,16 @@ module SubmissionsHelper
         SubmissionFile::SUBSTITUTION_CHAR)
   end
 
-
   # Helper methods to determine remark request status on a submission
   def remark_in_progress(submission)
-    submission.get_remark_result and submission.get_remark_result.marking_state == Result::MARKING_STATES[:partial]
+    submission.remark_result &&
+      submission.remark_result.marking_state == Result::MARKING_STATES[:incomplete]
   end
 
   def remark_complete_but_unreleased(submission)
-    submission.get_remark_result and submission.get_remark_result.marking_state == Result::MARKING_STATES[:complete] and !submission.get_remark_result.released_to_students
+    submission.remark_result &&
+      (submission.remark_result.marking_state ==
+         Result::MARKING_STATES[:complete]) &&
+        !submission.remark_result.released_to_students
   end
-
 end

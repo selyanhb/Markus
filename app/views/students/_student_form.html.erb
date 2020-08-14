@@ -1,32 +1,39 @@
-<div id="add_new_section_dialog">
-</div>
-<div class="section">
-  <%= form_for @user, :as => :user do |f| %>
+<aside class='dialog' id='add_new_section_dialog'></aside>
 
-    <%= render 'shared/flash_message' %>
+<%= form_for @user, as: :user do |f| %>
+  <div class='inline-labels'>
+    <%= f.label :user_name, User.human_attribute_name(:user_name) %>
+    <%= f.text_field :user_name %>
 
-    <%= raw(f.label(:user_name, I18n.t("user.user_name"))) %>
-    <%= raw(f.text_field :user_name) %><br />
+    <%= f.label :last_name, User.human_attribute_name(:last_name) %>
+    <%= f.text_field :last_name %>
 
-    <%= raw(f.label(:last_name, I18n.t("user.last_name"))) %>
-    <%= raw(f.text_field :last_name) %><br />
+    <%= f.label :first_name, User.human_attribute_name(:first_name) %>
+    <%= f.text_field :first_name %>
 
-    <%= raw(f.label(:first_name, I18n.t("user.first_name"))) %>
-    <%= raw(f.text_field :first_name) %><br />
+    <%= f.label :email, User.human_attribute_name(:email) %>
+    <%= f.text_field :email %>
 
-    <%= raw(f.label(:grace_credits, I18n.t("user.grace_credits"))) %>
-    <%= raw(f.text_field :grace_credits) %> <br />
+    <%= f.label :id_number, User.human_attribute_name(:id_number) %>
+    <%= f.text_field :id_number %>
 
-    <div id='select_sections'>
-      <%= render :partial => 'sections/select_sections',
-                 :locals => { :user => @user, :new_student => true } %>
-    </div>
+    <%= f.label :grace_credits, User.human_attribute_name(:grace_credits) %>
+    <%= f.text_field :grace_credits %>
 
-    <%= f.hidden_field :id %>
-    <%= f.submit t(:submit), :name => 'submit', :disable_with => I18n.t('working'),
-      :class => 'button' %>
-    <%= link_to t(:cancel), students_path(), :class => "button" %>
+    <%= f.label :section_id, Section.model_name.human %>
+    <span id='select_sections'>
+      <%= render partial: 'sections/select_sections',
+                 locals: { user: @user, new_student: true } %>
+    </span>
+  </div>
 
-  <% end %>
+  <%= f.hidden_field :id %>
 
-</div>
+  <p>
+    <%= f.submit t(:save),
+                 name: 'submit',
+                 data: { disable_with: t('working') },
+                 class: 'button' %>
+    <%= link_to t(:cancel), students_path, class: 'button' %>
+  </p>
+<% end %>

@@ -1,123 +1,48 @@
 <% content_for :head do %>
-  <%= stylesheet_link_tag('livepipe/tabs') %>
+  <%= render partial: 'boot',
+             formats: [:js],
+             handlers: [:erb] %>
+  <%= render partial: 'layouts/mathjax_config' %>
+  <%= javascript_include_tag 'MathJax_lib/MathJax.js?config=TeX-AMS-MML_HTMLorMML' %>
+  <%= javascript_include_tag 'MathJax/mathjax_helpers' %>
 <% end %>
 
-<% # UI LIBRARIES %>
-<%= javascript_include_tag 'livepipe/livepipe',
-                           'livepipe/window',
-                           'livepipe/tabs',
-                           'AnnotationCategories/index' %>
+<% content_for :title, t('.title',
+  assignment_short_identifier: @assignment.is_peer_review? ?
+    @assignment.parent_assignment.short_identifier + ' ' + PeerReview.model_name.human :
+    @assignment.short_identifier) %>
 
-<div id="title_bar">
-  <h1><%= I18n.t("annotations.title",
-        :assignment_short_identifier => @assignment.short_identifier) %>
-    <% path = add_annotation_category_assignment_annotation_categories_path(
-            :id => @assignment.id) %>
-        <%= link_to_function t('annotations.add_annotation_category'),
-                             :onclick => "add_annotation_category('#{path}')" %>
-  <span class="menu_bar">|</span>
-	<%= button_to_function t('upload'), 'modal_upload.open();' %>
-          <span class="menu_bar">|</span>
-	<%= button_to_function t('download'), 'modal_download.open();' %>
+<% path = new_assignment_annotation_category_path %>
 
-</h1>
+<% @heading_buttons = [
+  { link_text: t('.add_annotation_category'),
+    link_path: '#',
+    html_options: { onclick: "add_annotation_category('#{path}')" } },
+  { link_text: t('download'),
+    link_path: '#',
+    html_options: { id: 'downloadModal' } },
+  { link_text: t('upload'),
+    link_path: '#',
+    html_options: { id: 'uploadModal' } }
+] %>
+
+
+<p id='criterion_error' class='warning' style='display: none;'></p>
+<div class='pane-wrapper'>
+<div id='annotation_category_pane'>
+  <%= render partial: 'annotation_categories/annotation_category_pane' %>
 </div>
 
-<div class="wrapLeft">
-  <%= render 'shared/flash_message' %>
-  <%if @assignment.past_due_date?%>
-   <div class="notice">
-     <%=t('past_due_date_warning')%>
-   </div>
-  <% end %>
-<p id="criterion_error" class="warning" style="display: none;"></p>
-
-  <div id="annotation_category_pane">
-    <div class="annotation_categories_fieldset">
-     <div class="annotation_categories_list_bar">
-       <span class="annotation_category_title"><b><%= t("annotations.annotation_category") %></b></span>
-     </div>
-     <span class="clear"></span>
-     <ul id="annotation_category_pane_list">
-        <% if @annotation_categories.length > 0 %>
-          <% @annotation_categories.each do |annotation_category| %>
-            <%= render :partial => 'annotation_category', :locals => {:annotation_category => annotation_category} %>
-          <% end %>
-        <% else %>
-          <div id="no_annotation_categories_info" class="information"><%= t("annotations.no_annotation_categories") %></div>
-        <% end %>
-      </ul>  <!-- Rubric Criteria Pane -->
+<div id='annotations_pane' class='pane'>
+  <div id='annotation_list_holder'>
+    <div id='annotations_help'>
+      <h2><%= t(:help) %></h2>
+      <p><%= t('annotations.help_message') %></p>
+    </div>
   </div>
-   </div>
+</div>
+</div>
 
-    <div id="annotations_pane">
-      <div id="annotation_list_holder">
-       <div id="annotations_help">
-        <h1><%= t(:help) %></h1>
-	<p><%= t("annotations.help_message") %></p>
-      </div>
-    </div>
-
-   <div class="clear"></div>
-
-  </div> <!-- Edit Canvas -->
- </div>
-
-
-      <div id="upload_dialog" >
-        <h1><%= t("annotations.upload.upload_annotations") %></h1>
-        <%= t("annotations.upload.upload_message_csv").html_safe %>
-          <%= form_tag({:action => 'csv_upload', :id => @assignment.id}, {:multipart => true}) do %>
-          <p><%= file_field_tag :annotation_category_list_csv, :size => 0 %>
-          </p>
-          <p>
-            <%= I18n.t("encoding") %>
-            <%= select_tag(:encoding, options_for_select(@encodings)) %>
-            <br />
-            <br />
-            <%= submit_tag t(:upload), :disable_with => t(:uploading_please_wait) %>
-            <input type="reset" value="<%= t(:cancel) %>"
-                   onclick="modal_upload.close();" />
-          </p>
-        <% end %>
-        <%= t("annotations.upload.upload_message_yml").html_safe %>
-        <%= form_tag({:action => 'yml_upload', :id => @assignment.id}, {:multipart => true}) do %>
-          <p><%= file_field_tag :annotation_category_list_yml, :size => 0 %>
-          </p>
-          <p>
-            <%= I18n.t("encoding") %>
-            <%= select_tag(:encoding, options_for_select(@encodings)) %>
-            <br />
-	        <br />
-            <%= submit_tag t(:upload), :disable_with => t(:uploading_please_wait) %>
-            <input type="reset" value="<%= t(:cancel) %>"
-                   onclick="modal_upload.close();" />
-          </p>
-        <% end %>
-      </div>
-
-    <div id="download_dialog">
-    <h1><%= t("annotations.download.download_annotations") %></h1>
-      <ul>
-        <li>
-          <%= link_to t('annotations.download.download_csv'),
-                      {:action => 'download',
-                       :id => @assignment.id,
-                       :format => 'csv'},
-                      :onclick => 'modal_download.close();' %>
-        </li>
-        <li>
-          <%= link_to t('annotations.download.download_yml'),
-                      {:action => 'download',
-                       :id => @assignment.id,
-                       :format => 'yml'},
-                      :onclick => 'modal_download.close();' %>
-        </li>
-      </ul>
-      <input type="reset" value="<%= t(:cancel) %>"
-             onclick="modal_download.close();">
-    </div>
-
-
-
-
+<!-- Modals -->
+<%= render partial: 'annotation_download_modal', layout: 'layouts/modal_dialog'  %>
+<%= render partial: 'annotation_upload_modal', layout: 'layouts/modal_dialog'  %>

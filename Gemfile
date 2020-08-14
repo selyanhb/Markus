@@ -5,34 +5,63 @@
 # For production mode MySQL option :
 #   bundle install --without development test postgresql sqlite
 #
-# Make sure to decleare at least one 'source'
-source 'http://rubygems.org'
+# Make sure to declare at least one 'source'
+source 'https://rubygems.org'
 
 # Bundler requires these gems in all environments
-gem 'rails', '3.1.12'
-gem 'rubyzip'
-gem 'ya2yaml'
+gem 'puma'
+gem 'rails', '~> 6.0.3'
+gem 'sprockets'
+
+# Models and database interactions
+gem 'activerecord-import'
+gem 'pluck_to_hash'
+
+# CSS and JavaScript
+gem 'autoprefixer-rails'
+gem 'js-routes'
+gem 'libv8'
+gem 'sass-rails'
+gem 'uglifier'
+gem 'webpacker'
+
+# Background tasks
+gem 'activejob-status', git: 'https://github.com/inkstak/activejob-status.git'
+gem 'resque'
+
+# Authorization
+gem 'action_policy'
+
+# Statistics
+gem 'descriptive_statistics', require: 'descriptive_statistics/safe'
+gem 'histogram'
+
+# Internationalization
 gem 'i18n'
-gem 'will_paginate'
-gem 'fastercsv', :platforms => :ruby_18
-gem 'routing-filter'
-gem 'dynamic_form'
-# The 'exception_notification' gem version 4 is not compatible with
-# Rails 3.0.x
-gem 'exception_notification', '<4.0'
+gem 'i18n-js'
+gem 'rails-i18n', '~> 6.0.0'
 
+# Exam template requirements
+gem 'combine_pdf'
+gem 'prawn'
+gem 'prawn-qrcode'
+gem 'rmagick'
+gem 'zxing_cpp', require: 'zxing'
+
+# Ruby miscellany
 gem 'json'
-gem 'coffee-script'
-gem 'jquery-rails'
-gem 'prototype-rails' #Will be needed with Rails3.1
+gem 'mini_mime'
+gem 'net-ssh'
+gem 'redcarpet'
+gem 'rubyzip', require: 'zip'
+gem 'rugged'
 
-group :assets do
-  gem 'tilt', '~> 1.3.7'
-  gem 'sass-rails',   '~> 3.1.5'
-  gem 'coffee-rails', '~> 3.1.1'
-  gem 'uglifier',     '>= 1.0.3'
-end
-
+# Rails miscellany
+gem 'activerecord-session_store'
+gem 'cookies_eu'
+gem 'rails-html-sanitizer'
+gem 'responders'
+gem 'activemodel-serializers-xml'
 
 # If you are a MarkUs developer and use PostgreSQL, make sure you have
 # PostgreSQL header files installed (e.g. libpq-dev on Debian/Ubuntu).
@@ -47,7 +76,7 @@ end
 # Then install your bundle by:
 #   bundle install --without postgresql sqlite
 group :mysql do
-  gem 'mysql2', '>=0.3'
+  gem 'mysql2'
 end
 
 # If you are a MarkUs developer and use SQLite, make sure you have
@@ -58,26 +87,54 @@ group :sqlite do
   gem 'sqlite3'
 end
 
-# Other development related required gems. You don't need them
-# for production.
-group :development, :test do
-  gem 'rdoc'
-  gem 'rcov', :platforms => :mri_18
-  gem 'simplecov', :platforms => :mri_19
-  # FIXME: shoulda (>=4.0) introduces several deprecation warnings in tests
-  # we have to fix before doing an upgrade
-  gem 'shoulda', '<3.4'
-  # FIXME: shoulda-matchers (>= 2) is incompatible with Ruby 1.8
-  # Remove next line once MarkUs will not support Ruby 1.8,
-  # as shoulda-matchers is a dependency of shoulda
-  gem 'shoulda-matchers', '~>1.5'
-  gem 'machinist', '< 2'
-  gem 'faker'
-  gem 'railroady'
+# Gems only used for development should be listed here so that they
+# are not loaded in other environments.
+group :development do
+  gem 'awesome_print'
+  gem 'better_errors'
+  gem 'binding_of_caller' # supplement for better_errors
+  gem 'bootsnap', require: false
+  gem 'brakeman', require: false
+  gem 'bullet'
+  gem 'rails-erd'
+end
+
+group :test do
+  gem 'coveralls', require: false
+  gem 'factory_bot_rails'
+  gem 'fuubar'
+  gem 'machinist', '< 3'
+  gem 'shoulda'
+  gem 'simplecov', require: false
   gem 'time-warp'
-  gem 'ruby-debug', :platforms => :mri_18
-  gem 'debugger', :platforms => :mri_19
-  gem 'mocha', :require => false
+  gem 'shoulda-callback-matchers', '~> 1.1.1'
+  gem 'rails-controller-testing'
+end
+
+# Gems needed (wanted) for both development and test can be
+# listed here
+group :development, :test do
+  gem 'byebug'
+  gem 'i18n-tasks'
+  gem 'rspec-rails', '~> 4.0.1'
+end
+
+# Gems needed (wanted) for development, test and production_test
+# can be listed here
+# production_test is for testing a production-like deployment,
+# but using a seeded database
+group :development, :test, :production_test do
+  gem 'faker' # required for database seeding
+end
+
+# Gems not needed at runtime should go here so that MarkUs does
+# not waste time/memory loading them during boot
+group :offline do
+  gem 'railroady'
+  gem 'rdoc'
+  gem 'rubocop'
+  gem 'rubocop-git'
+  gem 'rubocop-performance'
 end
 
 # If you  plan to use unicorn servers for production
@@ -85,12 +142,4 @@ end
 # group if you are using Phusion Passenger.
 group :unicorn do
   gem 'unicorn'
-end
-
-# If you want to be able to view and annotate PDF files,
-# make sure that this group is included. GhostScript has to be
-# installed for rghost to work well. You also need to set
-# the PDF_SUPPORT bool to true in the config file(s).
-group :rghost do
-  gem 'rghost'
 end
